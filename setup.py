@@ -32,7 +32,7 @@ if __name__ == '__main__':
 
     cxx_flags = ['-O3', '-Wno-deprecated-declarations', '-Wno-unused-variable',
                  '-Wno-sign-compare', '-Wno-reorder', '-Wno-attributes']
-    nvcc_flags = ['-O3', '-Xcompiler', '-O3']
+    nvcc_flags = ['-O3', '-Xcompiler', '-O3', '-gencode', 'arch=compute_90,code=sm_90']  # Explicitly specify sm_90
     sources = ['csrc/deep_ep.cpp', 'csrc/kernels/runtime.cu', 'csrc/kernels/layout.cu', 'csrc/kernels/intranode.cu']
     include_dirs = ['csrc/']
     library_dirs = []
