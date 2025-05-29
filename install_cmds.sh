@@ -9,7 +9,7 @@ sudo modprobe nvidia_peermem
 lsmod | grep nvidia_peermem # should show nvidia_peermem module loaded
 
 # NOTE: if we need to auto-load when the system boots, we can add the following line to /etc/modules:
-# echo "modprobe nvidia_peermem" >>/etc/rc.local
+# sudo echo "modprobe nvidia_peermem" >>/etc/rc.local
 
 
 ## step1: install GDRCopy
@@ -155,6 +155,11 @@ cd build
 make -j32
 
 make install
+
+
+### install nvshmrun script
+
+bash scripts/install_hydra.sh /usr/local/nvshmem_src_3.2.5-1/ /usr/local
 
 
 ## Step4: Post-installation configuration
