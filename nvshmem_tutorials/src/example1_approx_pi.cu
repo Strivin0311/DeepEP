@@ -36,7 +36,7 @@ __global__ void monte_carlo_kernel(int* d_hits, int seed) {
 
 
 int main(int argc, char** argv) {
-    // init nvshmem
+    // init nvshmem before any nvshmem op
     nvshmem_init();
 
     // get my PE number and number of PEs
@@ -94,6 +94,8 @@ int main(int argc, char** argv) {
     nvshmem_free(d_hits); nvshmem_free(d_hits_total);
 
     // finalize nvshmem
+    // which adds an implicit collective synchronization across PEs
+    // to complete all pending communication and release all the resources
     nvshmem_finalize();
 
     return 0;
