@@ -11,8 +11,8 @@ __global__ void ring_shift(int* nvs_msg) {
     int npes = nvshmem_n_pes();
     int peer = (mype + 1) % npes;
 
-    // send `mype` id as message to my next peer
-    // since this api is launched on device-side:
+    // send `mype` to my next peer and recv `mype-1` from my prev peer
+    // since this (one-sided) api is launched on device-side:
     // 1. if peer is in this node, then we use cuda kernel to copy message
     // 2. if peer is in other node, then:
     //  2-1. if ibgda enabled, cuda core will call `ibgda_post_send` to let nic transport message

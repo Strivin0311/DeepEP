@@ -2,9 +2,10 @@
 BUILD_ROOT=./build
 SRC_ROOT=./src
 
-SRC_NAME=example3_ring_shift_with_mpi
+SRC_NAME=example4_ring_reduce
 
-NUM_RANKS=8
+NUM_PES=8
+NUM_RANKS=$NUM_PES
 
 NVCC_GENCODE="arch=compute_90,code=sm_90"
 
@@ -14,4 +15,12 @@ nvcc -rdc=true -ccbin mpicxx -gencode=$NVCC_GENCODE \
 -lnvshmem -lnvidia-ml -lcuda -lcudart \
 -o $BUILD_ROOT/$SRC_NAME $SRC_ROOT/$SRC_NAME.cu
 
-mpirun --allow-run-as-root -np $NUM_RANKS $BUILD_ROOT/$SRC_NAME
+export NVSHMEMTEST_USE_MPI_LAUNCHER=0
+
+if [[ $NVSHMEMTEST_USE_MPI_LAUNCHER -eq 1 ]]; then
+    mpirun --allow-run-as-root -np $NUM_RANKS $BUILD_ROOT/$SRC_NAME
+else
+    nvshmrun -np $NUM_PES $BUILD_ROOT/$SRC_NAME
+fi
+
+

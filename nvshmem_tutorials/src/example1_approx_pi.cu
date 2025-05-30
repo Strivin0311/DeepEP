@@ -70,7 +70,7 @@ int main(int argc, char** argv) {
     monte_carlo_kernel<<<num_blocks, block_size>>>(d_hits, seed);
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    // reduce hits with `nvshmem_int_sum_reduce`
+    // all-reduce hits with `nvshmem_int_sum_reduce`
     nvshmem_int_sum_reduce(NVSHMEM_TEAM_WORLD, d_hits_total, d_hits, 1);
 
     // copy hits from device to host
