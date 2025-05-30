@@ -90,6 +90,8 @@ int main(int argc, char** argv) {
     npes = nvshmem_n_pes();
     mype_node = nvshmem_team_my_pe(NVSHMEMX_TEAM_NODE); // local pe number
 
+    printf("[PE%d] Hello, World! And the number of PEs: %d\n", mype, npes);
+
     // set device
     CUDA_CHECK(cudaSetDevice(mype_node));
     CUDA_CHECK(cudaStreamCreate(&stream));
@@ -123,6 +125,9 @@ int main(int argc, char** argv) {
     CUDA_CHECK(cudaMemcpyAsync(host_data, nvs_data, sizeof(int), cudaMemcpyDeviceToHost, stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
     printf("reduced value on device [%d] is %d \n", mype_node, *host_data);
+
+    // destroy stream
+    CUDA_CHECK(cudaStreamDestroy(stream));
 
     // free memory
     nvshmem_free(nvs_data);

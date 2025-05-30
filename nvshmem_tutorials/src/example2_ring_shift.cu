@@ -63,6 +63,9 @@ int main(int argc, char** argv) {
     // print msg
     printf("[PE%d] received message: %d\n", mype_node, msg);
 
+    // destroy stream
+    cudaStreamDestroy(stream);
+
     // free memory on the symmetric heap
     nvshmem_free(nvs_msg);
 
