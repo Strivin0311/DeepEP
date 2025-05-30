@@ -14,6 +14,16 @@ __global__ void ring_shift(int* nvs_msg) {
     int peer = (mype + 1) % npes;
 
     // send `mype` id as message to my next peer
+    // since this api is launched on device-side:
+    // 1. if peer is in this node, then we use cuda kernel to copy message
+    // 2. if peer is in other node, then:
+    //  2-1. if ibgda enabled, cuda core will call `ibgda_post_send` to let nic transport message
+    //  2-2. otherwise, cuda core will notify the proxy thread,
+    //                      who will call `ibv_post_send` to let nic transport message through second qp
+
+    // while, if this api is launched on host-side:
+    // 1. if peer is in this node, then we use cudaMemcpyAsync to copy message
+    // 2. if peer is in other node, then cpu will call `ibv_post_send` to let nic transport message through first qp
     nvshmem_int_p(nvs_msg, mype, peer);
 }
 
@@ -23,7 +33,7 @@ int main(int argc, char** argv) {
     int mype_node, npes_node, msg;
     cudaStream_t stream;
 
-    // init mpi first
+    // init mpi first before nvshmem
     MPI_Comm mpi_comm = MPI_COMM_WORLD;
     MPI_Init(&argc, &argv);
     MPI_Comm_rank(mpi_comm, &rank);
@@ -31,7 +41,7 @@ int main(int argc, char** argv) {
 
     std::cout << "[RANK" << rank << "] " << "Hello, World! And the number of MPI ranks: " << num_ranks << std::endl;
     
-    // init nvshmem with mpi
+    // init nvshmem with mpi before any nvshmem op
     nvshmemx_init_attr_t nvs_attr;
     nvs_attr.mpi_comm = &mpi_comm;
     nvshmemx_init_attr(NVSHMEMX_INIT_WITH_MPI_COMM, &nvs_attr);
@@ -71,9 +81,11 @@ int main(int argc, char** argv) {
     nvshmem_free(nvs_msg);
 
     // finalize nvshmem
+    // which adds an implicit collective synchronization across PEs
+    // to complete all pending communication and release all the resources
     nvshmem_finalize();
 
-    // finalize mpi last
+    // finalize mpi last after nvshmem
     MPI_Finalize();
 
     return 0;
