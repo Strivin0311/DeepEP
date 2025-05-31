@@ -106,6 +106,9 @@ int main(int argc, char** argv) {
     dim3 dimGrid(1); dim3 dimBlock(1);
 
     // launch kernel
+    // `nvshmemx_collective_launch` function must be used to launch CUDA kernels on the GPU 
+    // when the CUDA kernels use NVSHMEM synchronization or collective APIs 
+    // (e.g., nvshmem_wait, nvshmem_barrier, nvshmem_barrier_all, or any other collective operation).
     NVSHMEM_CHECK(
         nvshmemx_collective_launch(
             (const void*) ring_reduce,
@@ -116,9 +119,7 @@ int main(int argc, char** argv) {
             stream
         )
     );
-
-    // wait the final reduced value is stored
-    // CUDA_CHECK(cudaDeviceSynchronize());
+    // barrier the stream to ensure all nvshmem ops are completed
     nvshmemx_barrier_all_on_stream(stream);
 
     // print results
