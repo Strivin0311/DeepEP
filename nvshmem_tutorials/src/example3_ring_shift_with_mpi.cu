@@ -62,9 +62,7 @@ int main(int argc, char** argv) {
 
     // launch kernel
     ring_shift<<<1, 1, 0, stream>>>(nvs_msg);
-
     // barrier the stream to ensure all nvshmem ops are completed
-    // i.e. nvs_msg is prepared
     nvshmemx_barrier_all_on_stream(stream);
 
     // copy msg to host
