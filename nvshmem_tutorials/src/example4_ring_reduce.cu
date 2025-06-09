@@ -37,15 +37,14 @@ __global__ void ring_reduce(int* nvs_data, int mype, int npes) {
         // and recv the current reduced value from prev peer into my nvs_data
         nvshmem_int_p(nvs_data, reduce_value, peer);
         // barrier all pes to wait `nvshmem_int_p` is finished
-        // REVIEW: why barrier is necessary 
-        // and can not be relaxed by neither `nvshmem_fence` nor `nvshmem_quiet`?
         nvshmem_barrier_all();
         // add `mype` to the reduced value from prev peer
         // and use it as my current reduced value in next iteration
         reduce_value = *nvs_data + mype;
-        // barrier all pes to wait for reduced value to be updated
-        // before launching next `nvshmem_int_p`
-        // REVIEW: why barrier is necessary here ?
+        // barrier all pes to wait for reduced value to be updated before launching `nvshmem_int_p` in next iteration
+        // otherwise, some fast pe may write its updated reduced value in next iteration to its next slow pe
+        // before the latter reads the updated reduced value from last iteration
+        // causing the final reduced value to be incorrect (and probably larger than expected)
         nvshmem_barrier_all();
     }
 
