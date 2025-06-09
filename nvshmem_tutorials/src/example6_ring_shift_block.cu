@@ -25,28 +25,47 @@
 
 
 #define THREADS_PER_BLOCK 1024
-#define NUM_ELEMS 8000
+#define NUM_ELEMS 8192
 
 
-__global__ void set_and_shift_kernel(float *send_data, float *recv_data, int num_elems, int mype,
-                                     int npes) {
+__global__ void set_and_shift_per_warp_kernel(float *send_data, float *recv_data, int num_elems, int mype, int npes) {
+    int block_offset = blockIdx.x * blockDim.x;
+    int warp_offset = block_offset + threadIdx.x / warpSize * warpSize;
+    int thread_idx = block_offset + threadIdx.x;
+    // some warp in the last block may be out of bounds
+    // note: this can be also written as:
+    // if (thread_idx >= num_elems) return; 
+    // i.e. allow some threads in the same warp to return early and not call the nvshmem API,
+    // but might be less efficient due to warp divergence
+    if (warp_offset >= num_elems) return;
+    if (thread_idx < num_elems) send_data[thread_idx] = mype;
+
+    int peer = (mype + 1) % npes;
+
+    // All threads in the same warp call the nvshmem per-warp API with the same arguments
+    nvshmemx_float_put_warp(
+        recv_data + warp_offset,
+        send_data + warp_offset,
+        min(warpSize, num_elems - warp_offset),
+        peer
+    );
+}
+
+
+__global__ void set_and_shift_per_block_kernel(float *send_data, float *recv_data, int num_elems, int mype, int npes) {
     int block_offset = blockIdx.x * blockDim.x;
     int thread_idx = block_offset + threadIdx.x;
     if (thread_idx < num_elems) send_data[thread_idx] = mype;
 
     int peer = (mype + 1) % npes;
 
-    /* Every thread in block 0 calls nvshmemx_float_put_block. Alternatively,
-       every thread can call shmem_float_p, but shmem_float_p has a disadvantage
-       that when the destination GPU is connected via IB, there will be one rma
-       message for every single element which can be detrimental to performance.
-       And the disadvantage with shmem_float_put is that when the destination GPU is p2p
-       connected, it cannot leverage multiple threads to copy the data to the destination
-       GPU. */
-    nvshmemx_float_put_block(recv_data + block_offset, send_data + block_offset,
-                             min(blockDim.x, num_elems - block_offset),
-                             peer); /* All threads in a block call the API
-                                       with the same arguments */
+    // All threads in the same block call the nvshmem per-block API with the same arguments
+    nvshmemx_float_put_block(
+        recv_data + block_offset, 
+        send_data + block_offset,
+        min(blockDim.x, num_elems - block_offset),
+        peer
+    );
 }
 
 int main(int c, char *v[]) {
@@ -76,8 +95,11 @@ int main(int c, char *v[]) {
     // prepare kernel args
     num_blocks = (num_elems + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
 
-    // launch kernel
-    set_and_shift_kernel<<<num_blocks, THREADS_PER_BLOCK, 0, stream>>>(send_data, recv_data, num_elems, mype, npes);
+    // launch kernel (per block or per warp)
+    
+    // set_and_shift_per_block_kernel<<<num_blocks, THREADS_PER_BLOCK, 0, stream>>>(send_data, recv_data, num_elems, mype, npes);
+    set_and_shift_per_warp_kernel<<<num_blocks, THREADS_PER_BLOCK, 0, stream>>>(send_data, recv_data, num_elems, mype, npes);
+    
     // barrier the stream to ensure all nvshmem ops are completed
     nvshmemx_barrier_all_on_stream(stream);
 
