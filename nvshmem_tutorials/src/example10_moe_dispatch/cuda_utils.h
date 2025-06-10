@@ -17,6 +17,6 @@ namespace ship {
     template <typename T> __device__ T round_up(T x, T y) { return ceil_div<T>(x, y) * y; }
     
     } // namespace device
-} // namespace pplx
+} // namespace ship
 
 #endif
