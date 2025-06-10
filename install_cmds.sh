@@ -168,6 +168,7 @@ vim ~/.bashrc
 
 # in ~/.bashrc, add belows:
 export NVSHMEM_DIR=/opt/nvshmem
+export NVSHMEM_HOME=/opt/nvshmem
 export LD_LIBRARY_PATH="${NVSHMEM_DIR}/lib:$LD_LIBRARY_PATH"
 export PATH="${NVSHMEM_DIR}/bin:$PATH"
 
@@ -183,5 +184,5 @@ nvshmem-info -a # Should display details of nvshmem
 # nvcc_flags = ['-O3', '-Xcompiler', '-O3', '-rdc=true', '--ptxas-options=--register-usage-level=10',
 #                   '-gencode', 'arch=compute_90,code=sm_90']  # Explicitly specify sm_90
 
-NVSHMEM_DIR=/opt/nvshmem pip install -e . --no-build-isolation --config-settings editable_mode=strict
+pip install -e . --no-build-isolation --config-settings editable_mode=strict
 
