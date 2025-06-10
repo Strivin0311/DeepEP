@@ -19,32 +19,49 @@ void testDispatch(
     unsigned rank,
     unsigned world_size,
     uint32_t localTokens = 4,
-    uint32_t hiddenDim = 16,
+    uint32_t hiddenDim = 3,
     uint32_t numExperts = 8,
     uint32_t expertsPerToken = 2,
     uint32_t maxNumTokens = 10
 ) {
+    // check
     Assert(
         numExperts / world_size == expertsPerToken, 
         "Just for test, rank[i] and rank[i+1] buterfly transfer the same token"
     );
-    std::vector<uint32_t> tokens_h(localTokens * hiddenDim, rank + 10); // All elements initialized to rank
-    std::vector<uint32_t> indices_h(localTokens * expertsPerToken, 0);
-    uint32_t numLocalExperts = numExperts / world_size;
     assert(numExperts % world_size == 0);
+    uint32_t numLocalExperts = numExperts / world_size;
 
+    // init tokens
+    std::vector<uint32_t> tokens_h(localTokens * hiddenDim);
+    for (int i = 0; i < localTokens; i++) {
+        for (int j = 0; j < hiddenDim; j++) {
+            tokens_h[i * hiddenDim + j] = i + rank * localTokens + 10;
+        }
+    }
+    
+    // print expected information
     std::ofstream logFile(SHIP_LOG_PREFIX + std::to_string(rank) + ".log");
     logFile << "Total ranks: " << world_size << "\n";
     logFile << "Each rank will transfer tokens num: " << localTokens << "\n";
     logFile << "Each rank have experts num: " << numLocalExperts << "\n";
     logFile << "Each token have experts num: " << expertsPerToken << "\n";
 
+    // init transfer indices
+    std::vector<uint32_t> indices_h(localTokens * expertsPerToken, 0);
     for (int i = 0; i < localTokens; i ++) {
         // For each token, assign it to other rank
         for (int j = 0; j < expertsPerToken; j ++) {
             // indices_h[i * expertsPerToken + j] = j;
+
+            // every odd/even rank assign all tokens to the experts which in the paired even/odd rank
             // indices_h[i * expertsPerToken + j] = (rank ^ 0x1) * numLocalExperts + j;
-            indices_h[i * expertsPerToken + j] = (rank ^ i) * numLocalExperts + j;
+
+            // assign each token to the experts which in the same rank
+            // indices_h[i * expertsPerToken + j] = (rank ^ i) * numLocalExperts + j;
+
+            // mixed assign
+            indices_h[i * expertsPerToken + j] = (rank * 17 + i * 11 + j * 13 + 23) % numExperts;
         }
     }
 

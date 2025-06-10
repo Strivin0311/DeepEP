@@ -47,7 +47,6 @@ __global__ void dispatchKernel (
 		}
 		__syncthreads();
 
-
 		// Dispatch tokens to the local experts.
 		// warp9 counts the number of tokens assigned to each expert.
 		if (warpId == NUM_WARPS - 1) {
@@ -212,27 +211,31 @@ void AllToAllIntraNode::dispatch (
 		cudaMemcpyDeviceToHost
 	);
 
-	// print the result
+	// stats and print the result
+	std::vector<int> recvTokens_h(numLocalExperts, 0);
 	for (int i = 0; i < world_size; i++) {
 		for (int j = 0; j < numLocalExperts; j++) {
-			if (numTokensBuffer_h[i * numLocalExperts + j] == 1) continue;
-
-			int idxExpert = rank * numLocalExperts + j;
-			logFile << "Expert " << idxExpert << ": received " << numTokensBuffer_h[i * numLocalExperts + j] - 1 << " tokens.\n";
+			int recvTokens = numTokensBuffer_h[i * numLocalExperts + j] - 1;
+			recvTokens_h[j] += recvTokens;
 		}
 	}
-	for (int i = 0; i < world_size; i++) {
-		for (int j = 0; j < numLocalExperts; j++) {
+	for (int j = 0; j < numLocalExperts; j++) {
+		int idxExpert = rank * numLocalExperts + j;
+		logFile << "\nExpert " << idxExpert << ": received " << recvTokens_h[j] << " tokens in total, details as follows:\n";
+		for (int i = 0; i < world_size; i++) {
 			for (int k = 0; k < maxNumTokens; k++) {
-				int idxExpert = rank * numLocalExperts + j;
-				logFile << "Expert " << idxExpert << " received token from rank " << i << ": ";
-				for (int w = 0; w < hiddenDimBytes; w += 4) {
-					uint32_t val = *((uint32_t*)(xDispatchOut_h + i * numLocalExperts * maxNumTokens * hiddenDimBytes + j * maxNumTokens * hiddenDimBytes + k * hiddenDimBytes + w));
-					logFile << val << " ";
+				uint32_t* first_val_ptr = (uint32_t*)(xDispatchOut_h + i * numLocalExperts * maxNumTokens * hiddenDimBytes + j * maxNumTokens * hiddenDimBytes + k * hiddenDimBytes);
+				if (*first_val_ptr == 0) continue;
+
+				logFile << "> Received token from rank " << i << ": ";
+				for (int w = 0; w < hiddenDimBytes / sizeof(uint32_t); w += 1) {
+					uint32_t val = *(first_val_ptr + w);
+					logFile << val << " "; 
 				}
 				logFile << "\n";
 			}
 		}
+		logFile << "\n";
 	}
 
 	// free host memory
