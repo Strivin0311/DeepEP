@@ -56,7 +56,7 @@ inline uint32_t ceil_div(uint32_t x, uint32_t y) {
     return ((x + y - 1) / y);
 }
 
-inline void print_transmit_information (
+inline void print_transfer_information (
     const std::vector<uint32_t> &tokens_h,
     const std::vector<uint32_t> &indices_h,
     uint32_t localTokens,

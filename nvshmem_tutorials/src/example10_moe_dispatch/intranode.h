@@ -81,10 +81,16 @@ namespace ship {
         std::byte *xDispatchOut = nullptr;
 
         void dispatch(
-            const Stride1D<uint32_t> &tokens_d,
-	        const Stride2D<uint32_t> &indices_d,
+            const DeviceBuffer<uint32_t> &tokens_d,
+	        const DeviceBuffer<uint32_t> &indices_d,
             std::ofstream &logFile
         );
+
+        ~AllToAllIntraNode() {
+            nvshmem_free(numTokensBuffer);
+            nvshmem_free(numDispatchRecvBuffer);
+            nvshmem_free(xDispatchOut);
+        }
     };
 }
 

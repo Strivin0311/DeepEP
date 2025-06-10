@@ -29,10 +29,7 @@ __global__ void dispatchKernel (
 	std::byte *xDispatchOut,
 
 	uint32_t *tokens,
-	uint32_t tokenElemStride,
-	uint32_t *indices,
-	uint32_t indexElemStride,
-	uint32_t indexRowStride
+	uint32_t *indices
 ) {
 	const unsigned WARP_SIZE = 32;
 	const unsigned NUM_WARPS = blockDim.x / WARP_SIZE;
@@ -156,10 +153,11 @@ __global__ void dispatchKernel (
 }
 
 void AllToAllIntraNode::dispatch (
-	const Stride1D<uint32_t> &tokens_d,
-	const Stride2D<uint32_t> &indices_d,
+	const DeviceBuffer<uint32_t> &tokens_d,
+	const DeviceBuffer<uint32_t> &indices_d,
 	std::ofstream &logFile
 ) {
+	// prepare kernel args
 	constexpr unsigned NUM_WRAPS = 10;
 	constexpr unsigned numThreadsperBlock = 32 * NUM_WRAPS;
 	const unsigned numBlocks = std::min((uint32_t)132, numExperts);
@@ -181,21 +179,24 @@ void AllToAllIntraNode::dispatch (
 		&numDispatchRecvBuffer,
 		&xDispatchOut,
 		const_cast<uint32_t**>(&tokens_d.data),
-		const_cast<size_t*>(&tokens_d.strideElem),
-		const_cast<uint32_t**>(&indices_d.data),
-		const_cast<size_t*>(&indices_d.strideElem),
-		const_cast<size_t*>(&indices_d.strideRow)
+		const_cast<uint32_t**>(&indices_d.data)
 	};
 
-	cudaLaunchCooperativeKernel(
+	// launch kernel in cooperative mode
+	// cudaLaunchCooperativeKernel(
+	nvshmemx_collective_launch(
         (void *)&dispatchKernel<true, true>,
         dimGrid,
         dimBlock,
         args,
-		sizeof(uint32_t) * numExperts
+		sizeof(uint32_t) * numExperts,
+		0
     );
+
+	// wait for kernel to finish
 	cudaDeviceSynchronize();
 
+	// copy data to host
 	uint64_t *numTokensBuffer_h = new uint64_t[numLocalExperts * world_size];
 	cudaMemcpy(
 		numTokensBuffer_h,
@@ -203,16 +204,6 @@ void AllToAllIntraNode::dispatch (
 		numLocalExperts * world_size * sizeof(uint64_t),
 		cudaMemcpyDeviceToHost
 	);
-	for (int i = 0; i < world_size; i++) {
-		for (int j = 0; j < numLocalExperts; j++) {
-			if (numTokensBuffer_h[i * numLocalExperts + j] == 1) continue;
-
-			int idxExpert = rank * numLocalExperts + j;
-			logFile << "Expert " << idxExpert << ": reveive " << numTokensBuffer_h[i * numLocalExperts + j] - 1 << " tokens.\n";
-		}
-	}
-	delete[] numTokensBuffer_h;
-
 	std::byte *xDispatchOut_h = new std::byte[world_size * numLocalExperts * maxNumTokens * hiddenDimBytes];
 	cudaMemcpy(
 		xDispatchOut_h,
@@ -220,11 +211,21 @@ void AllToAllIntraNode::dispatch (
 		world_size * numLocalExperts * maxNumTokens * hiddenDimBytes * sizeof(std::byte),
 		cudaMemcpyDeviceToHost
 	);
+
+	// print the result
+	for (int i = 0; i < world_size; i++) {
+		for (int j = 0; j < numLocalExperts; j++) {
+			if (numTokensBuffer_h[i * numLocalExperts + j] == 1) continue;
+
+			int idxExpert = rank * numLocalExperts + j;
+			logFile << "Expert " << idxExpert << ": received " << numTokensBuffer_h[i * numLocalExperts + j] - 1 << " tokens.\n";
+		}
+	}
 	for (int i = 0; i < world_size; i++) {
 		for (int j = 0; j < numLocalExperts; j++) {
 			for (int k = 0; k < maxNumTokens; k++) {
 				int idxExpert = rank * numLocalExperts + j;
-				logFile << "Expert " << idxExpert << " reveive token from rank " << i << ": ";
+				logFile << "Expert " << idxExpert << " received token from rank " << i << ": ";
 				for (int w = 0; w < hiddenDimBytes; w += 4) {
 					uint32_t val = *((uint32_t*)(xDispatchOut_h + i * numLocalExperts * maxNumTokens * hiddenDimBytes + j * maxNumTokens * hiddenDimBytes + k * hiddenDimBytes + w));
 					logFile << val << " ";
@@ -233,5 +234,8 @@ void AllToAllIntraNode::dispatch (
 			}
 		}
 	}
+
+	// free host memory
+	delete[] numTokensBuffer_h;
 	delete[] xDispatchOut_h;
 }

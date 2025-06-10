@@ -24,7 +24,10 @@ void testDispatch(
     uint32_t expertsPerToken = 2,
     uint32_t maxNumTokens = 10
 ) {
-    Assert(numExperts / world_size == expertsPerToken, "Just for test, rank[i] and rank[i+1] buterfly transfer the same token");
+    Assert(
+        numExperts / world_size == expertsPerToken, 
+        "Just for test, rank[i] and rank[i+1] buterfly transfer the same token"
+    );
     std::vector<uint32_t> tokens_h(localTokens * hiddenDim, rank + 10); // All elements initialized to rank
     std::vector<uint32_t> indices_h(localTokens * expertsPerToken, 0);
     uint32_t numLocalExperts = numExperts / world_size;
@@ -40,22 +43,27 @@ void testDispatch(
         // For each token, assign it to other rank
         for (int j = 0; j < expertsPerToken; j ++) {
             // indices_h[i * expertsPerToken + j] = j;
-            indices_h[i * expertsPerToken + j] = (rank ^ 0x1) * numLocalExperts + j;
+            // indices_h[i * expertsPerToken + j] = (rank ^ 0x1) * numLocalExperts + j;
+            indices_h[i * expertsPerToken + j] = (rank ^ i) * numLocalExperts + j;
         }
     }
+
+    // sanity check
     for (int i = 0; i < localTokens; i ++) {
         for (int j = 1; j < expertsPerToken; j ++) {
-            Assert(indices_h[i * expertsPerToken] != indices_h[i * expertsPerToken + j], "The same token should not be assigned to the same expert");
+            Assert(
+                indices_h[i * expertsPerToken] != indices_h[i * expertsPerToken + j], 
+                "The same token should not be assigned to the same expert"
+            );
         }
     }
-        
-    print_transmit_information(tokens_h, indices_h, localTokens, hiddenDim, expertsPerToken, rank, logFile);
-
+    
+    // print transfer information
+    print_transfer_information(tokens_h, indices_h, localTokens, hiddenDim, expertsPerToken, rank, logFile);
 
     // Device buffers
     DeviceBuffer<uint32_t> tokens_d(tokens_h);
     DeviceBuffer<uint32_t> indices_d(indices_h);
-
     const uint32_t hiddenDimBytes = hiddenDim * sizeof(tokens_d.get()[0]);
 
     AllToAllIntraNode allToAllIntranode(
@@ -72,24 +80,31 @@ void testDispatch(
     logFile << "\n\n\n--------------Dispatch start----------------\n\n\n";
 
     allToAllIntranode.dispatch(
-        Stride1D<uint32_t>(tokens_d, hiddenDim),
-        Stride2D<uint32_t>(indices_d, 1, expertsPerToken),
+        tokens_d,
+        indices_d,
         logFile
     );
 
+    logFile << "\n\n\n--------------Dispatch end----------------\n\n\n";
+
+    logFile.close();
 }
 
 int main(int argc, char **argv) {
+    // init nvshmem
     nvshmem_init();
 
     int my_pe = nvshmem_my_pe();
     int n_pes = nvshmem_n_pes();
 
+    // set device
     int deviceId = my_pe % 8;
     cudaSetDevice(deviceId);
 
+    // run dispatch test
     testDispatch(my_pe, n_pes);
 
+    // finalize nvshmem
     nvshmem_finalize();
 
     return 0;
