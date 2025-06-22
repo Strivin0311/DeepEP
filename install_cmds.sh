@@ -44,11 +44,20 @@ popd
 
 sudo ./insmod.sh  # Load kernel modules on the bare-metal system
 
+lsmod | grep gdrdrv # should show gdrdrv module loaded, like: `gdrdrv 123456  0`
+
 
 ### Container environment notes
 
-# NOTE: keep kernel modules loaded (gdrdrv) on host
-# and might need to restart the container
+# you might need to reinstall debs in /path/to/gdrcopy-2.4.4/packages on the container
+# NOTE: the installation process might seems to be unsuccessful, but it is actually fine
+
+sudo dpkg -i gdrdrv-dkms_2.4.4_amd64.Ubuntu22_04.deb \
+             libgdrapi_2.4.4_amd64.Ubuntu22_04.deb \
+             gdrcopy-tests_2.4.4_amd64.Ubuntu22_04+cuda12.4.deb \
+             gdrcopy_2.4.4_amd64.Ubuntu22_04.deb
+
+# NOTE: keep kernel modules loaded (gdrdrv) on host and might need to restart the container
 
 gdrcopy_copybw  # should show bandwidth test results as belows:
 
@@ -89,12 +98,19 @@ sudo vim /etc/modprobe.d/nvidia.conf
 # insert below line and wq
 options nvidia NVreg_EnableStreamMemOPs=1 NVreg_RegistryDwords="PeerMappingOverride=1;"
 
-
+# update initramfs to apply the changes
 sudo update-initramfs -u
+
+# reboot
 sudo reboot
 
 
-## Step3: Build DeepEp-patched NVSHMEM
+# after reboot, check if the changes are applied
+# you should see `options nvidia NVreg_EnableStreamMemOPs=1 NVreg_RegistryDwords="PeerMappingOverride=1;"` in the output
+modprobe -c | grep NVreg
+
+
+## Step3: Build DeepEp-patched NVSHMEM in Container
 
 ### get nvshmem src
 
