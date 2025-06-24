@@ -52,6 +52,8 @@ lsmod | grep gdrdrv # should show gdrdrv module loaded, like: `gdrdrv 123456  0`
 # you might need to reinstall debs in /path/to/gdrcopy-2.4.4/packages on the container
 # NOTE: the installation process might seems to be unsuccessful, but it is actually fine
 
+cd /path/to/gdrcopy-2.4.4/packages
+
 sudo dpkg -i gdrdrv-dkms_2.4.4_amd64.Ubuntu22_04.deb \
              libgdrapi_2.4.4_amd64.Ubuntu22_04.deb \
              gdrcopy-tests_2.4.4_amd64.Ubuntu22_04+cuda12.4.deb \
@@ -172,6 +174,7 @@ make -j32
 
 make install
 
+cd ..
 
 ### install nvshmrun script
 
@@ -196,7 +199,7 @@ nvshmem-info -a # Should display details of nvshmem
 
 ## Step5: install DeepEP
 
-# NOTE: in setup.py, we should explicitly add `gencode` for sm90 only to nvcc flags:
+# NOTE: due to some sm_80-related error, in setup.py, we should explicitly add `gencode` for sm90 only to nvcc flags:
 # nvcc_flags = ['-O3', '-Xcompiler', '-O3', '-rdc=true', '--ptxas-options=--register-usage-level=10',
 #                   '-gencode', 'arch=compute_90,code=sm_90']  # Explicitly specify sm_90
 
