@@ -6,7 +6,7 @@
 
 sudo modprobe nvidia_peermem
 
-lsmod | grep nvidia_peermem # should show nvidia_peermem module loaded
+lsmod | grep nvidia_peermem # should show nvidia_peermem module loaded, like `nvidia_peermem 16384  0`
 
 # NOTE: if we need to auto-load when the system boots, we can add the following line to /etc/modules:
 # sudo echo "modprobe nvidia_peermem" >>/etc/rc.local
@@ -35,6 +35,11 @@ sudo apt install build-essential devscripts debhelper fakeroot pkg-config dkms
 
 CUDA=/usr/local/cuda ./build-deb-packages.sh
 
+# NOTE: the following installation process might seems to be unsuccessful as below:
+#   Errors were encountered while processing:
+#   gdrdrv-dkms:amd64
+#   gdrcopy:amd64
+# but it is actually fine
 sudo dpkg -i gdrdrv-dkms_2.4.4_amd64.Ubuntu22_04.deb \
              libgdrapi_2.4.4_amd64.Ubuntu22_04.deb \
              gdrcopy-tests_2.4.4_amd64.Ubuntu22_04+cuda12.4.deb \
@@ -203,5 +208,5 @@ nvshmem-info -a # Should display details of nvshmem
 # nvcc_flags = ['-O3', '-Xcompiler', '-O3', '-rdc=true', '--ptxas-options=--register-usage-level=10',
 #                   '-gencode', 'arch=compute_90,code=sm_90']  # Explicitly specify sm_90
 
-pip install -e . --no-build-isolation --config-settings editable_mode=strict
+pip install -e . -v --no-build-isolation --config-settings editable_mode=strict > install.log 2>&1
 
