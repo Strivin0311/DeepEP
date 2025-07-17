@@ -6,10 +6,13 @@
 
 sudo modprobe nvidia_peermem
 
-lsmod | grep nvidia_peermem # should show nvidia_peermem module loaded, like `nvidia_peermem 16384  0`
+# should output something like `nvidia_peermem 16384  0`, 
+# meaning nvidia_peermem module is loaded
+lsmod | grep nvidia_peermem
 
-# NOTE: if we need to auto-load when the system boots, we can add the following line to /etc/modules:
-# sudo echo "modprobe nvidia_peermem" >>/etc/rc.local
+# NOTE: if we need to auto-load when the system boots, 
+# we can add the following line to /etc/modules in root privileges:
+# sudo su; echo "modprobe nvidia_peermem" >> /etc/rc.local
 
 
 ## step1: install GDRCopy
@@ -175,6 +178,9 @@ cmake -S . -B build/ -DCMAKE_INSTALL_PREFIX=/opt/nvshmem -D MLX5_lib=/usr/lib/x8
 
 cd build
 
+# NOTE: if you encounter the error: 
+#   nvshmem_src_3.2.5-1/nvshmem_src/examples/moe_shuffle.cu(127): error: identifier "getopt" is undefined
+# please add #include <unistd.h> to the include section of nvshmem_src/examples/moe_shuffle.cu
 make -j32
 
 make install
@@ -208,5 +214,5 @@ nvshmem-info -a # Should display details of nvshmem
 # nvcc_flags = ['-O3', '-Xcompiler', '-O3', '-rdc=true', '--ptxas-options=--register-usage-level=10',
 #                   '-gencode', 'arch=compute_90,code=sm_90']  # Explicitly specify sm_90
 
-pip install -e . -v --no-build-isolation --config-settings editable_mode=strict > install.log 2>&1
+pip install -e . -v --no-build-isolation --config-settings editable_mode=strict > logs/install.log 2>&1
 
