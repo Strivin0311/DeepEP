@@ -117,7 +117,7 @@ sudo reboot
 
 # after reboot, check if the changes are applied
 # you should see `options nvidia NVreg_EnableStreamMemOPs=1 NVreg_RegistryDwords="PeerMappingOverride=1;"` in the output
-modprobe -c | grep NVreg
+sudo modprobe -c | grep NVreg
 
 
 ## Step3: Build DeepEp-patched NVSHMEM in Container
