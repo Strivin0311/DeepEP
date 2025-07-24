@@ -33,7 +33,8 @@ class Buffer:
                  num_nvl_bytes: int = 0, num_rdma_bytes: int = 0,
                  low_latency_mode: bool = False, num_qps_per_rank: int = 24,
                  allow_nvlink_for_low_latency_mode: bool = True,
-                 allow_mnnvl: bool = False) -> None:
+                 allow_mnnvl: bool = False,
+                 explicitly_destroy: bool = False) -> None:
         """
         Initialize the communication buffer.
 
@@ -49,6 +50,9 @@ class Buffer:
                 Warning: PCIe connections may lead to errors due to memory ordering issues,
                 please make sure all connections are via NVLink.
             allow_mnnvl: whether to allow MNNVL
+            explicitly_destroy: If this flag is set to True, you need to explicitly call `destroy()` to release resources;
+                otherwise, the resources will be released by the destructor.
+                Note: Releasing resources in the destructor may cause Python's exception handling process to hang.
         """
         check_nvlink_connections(group)
 
@@ -59,7 +63,8 @@ class Buffer:
         self.num_nvl_bytes = num_nvl_bytes
         self.num_rdma_bytes = num_rdma_bytes
         self.low_latency_mode = low_latency_mode
-        self.runtime = deep_ep_cpp.Buffer(self.rank, self.group_size, num_nvl_bytes, num_rdma_bytes, low_latency_mode)
+        self.explicitly_destroy = explicitly_destroy
+        self.runtime = deep_ep_cpp.Buffer(self.rank, self.group_size, num_nvl_bytes, num_rdma_bytes, low_latency_mode, explicitly_destroy)
 
         # Synchronize device IDs
         device_ids = [None, ] * self.group_size
@@ -78,10 +83,9 @@ class Buffer:
             assert num_qps_per_rank > 0
             os.environ['NVSHMEM_DISABLE_P2P'] = '0' if allow_nvlink_for_low_latency_mode else '1'
             os.environ['NVSHMEM_IB_ENABLE_IBGDA'] = '1'
-            os.environ['NVSHMEM_IBGDA_NIC_HANDLER'] = 'gpu'
             os.environ['NVSHMEM_IBGDA_NUM_RC_PER_PE'] = f'{num_qps_per_rank}'
             # Make sure QP depth is always larger than the number of on-flight WRs, so that we can skip WQ slot check
-            os.environ['NVSHMEM_QP_DEPTH'] = '1024'
+            os.environ['NVSHMEM_QP_DEPTH'] = os.environ.get('NVSHMEM_QP_DEPTH', '1024')
 
             # Reduce gpu memory usage
             # 6 default teams + 1 extra team
@@ -105,6 +109,18 @@ class Buffer:
         # Make CPP runtime available
         self.runtime.sync(device_ids, ipc_handles, root_unique_id)
         assert self.runtime.is_available()
+
+    def destroy(self):
+        """
+        Destroy the cpp runtime and release resources.
+        
+        """
+
+        assert self.explicitly_destroy, '`explicitly_destroy` flag must be set'
+
+        self.runtime.destroy()
+        self.runtime = None
+
 
     @staticmethod
     def is_sm90_compiled():
@@ -231,9 +247,9 @@ class Buffer:
             2: Config(Buffer.num_sms, 10, 256, 6, 128),
             4: Config(Buffer.num_sms, 9, 256, 6, 128),
             8: Config(Buffer.num_sms, 4, 256, 6, 128),
-            16: Config(Buffer.num_sms, 2, 288, 28, 128),
-            24: Config(Buffer.num_sms, 1, 288, 20, 128),
-            32: Config(Buffer.num_sms, 1, 288, 20, 128),
+            16: Config(Buffer.num_sms, 4, 288, 12, 128),
+            24: Config(Buffer.num_sms, 1, 288, 8, 128),
+            32: Config(Buffer.num_sms, 1, 288, 8, 128),
             64: Config(Buffer.num_sms, 1, 288, 20, 128),
             128: Config(Buffer.num_sms, 1, 560, 12, 128),
             144: Config(Buffer.num_sms, 2, 720, 8, 128),
@@ -562,7 +578,7 @@ class Buffer:
 
     # noinspection PyTypeChecker
     def low_latency_combine(self, x: torch.Tensor, topk_idx: torch.Tensor, topk_weights: torch.Tensor,
-                            handle: tuple, zero_copy: bool = False, async_finish: bool = False,
+                            handle: tuple, use_logfmt: bool = False, zero_copy: bool = False, async_finish: bool = False,
                             return_recv_hook: bool = False, out: Optional[torch.Tensor] = None) -> \
             Tuple[torch.Tensor, EventOverlap, Callable]:
         """
@@ -581,6 +597,7 @@ class Buffer:
             topk_weights: `[num_combined_tokens, num_topk]` with `torch.float`, the expert weights selected by the dispatched
                 tokens. The received tokens will be reduced with the weights in this tensor.
             handle: the communication handle given by the `dispatch` function.
+            use_logfmt: whether to use an internal "LogFMT with dynamic per-64-channel cast" format (10 bits).
             zero_copy: whether the tensor is already copied into the RDMA buffer, should be cooperative
                 with `get_next_low_latency_combine_buffer`.
             async_finish: the current stream will not wait for the communication kernels to be finished if set.
@@ -597,7 +614,8 @@ class Buffer:
         src_info, layout_range, num_max_dispatch_tokens_per_rank, hidden, num_experts = handle
         combined_x, event, hook = self.runtime.low_latency_combine(x, topk_idx, topk_weights, src_info, layout_range,
                                                                    num_max_dispatch_tokens_per_rank, num_experts,
-                                                                   zero_copy, async_finish, return_recv_hook, out)
+                                                                   use_logfmt, zero_copy, async_finish, return_recv_hook,
+                                                                   out)
         tensors_to_record = (x, topk_idx, topk_weights, src_info, layout_range, combined_x)
         return combined_x, EventOverlap(event, tensors_to_record if async_finish else None), hook
 
