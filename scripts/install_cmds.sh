@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# NOTE: if using ngc-pytorch container, deepep now should be installed at version >= 25.03
+
 ## Step0: Prerequisites
 
 ### eanble nvidia_peermem on the host
