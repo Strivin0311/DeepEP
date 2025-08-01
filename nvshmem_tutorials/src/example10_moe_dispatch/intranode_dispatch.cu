@@ -149,6 +149,7 @@ __global__ void dispatchKernel (
 	}
 }
 
+
 void AllToAllIntraNode::dispatch (
 	const DeviceBuffer<uint32_t> &tokens_d,
 	const DeviceBuffer<uint32_t> &indices_d,
@@ -194,18 +195,18 @@ void AllToAllIntraNode::dispatch (
 	cudaDeviceSynchronize();
 
 	// copy data to host
-	uint64_t *numTokensBuffer_h = new uint64_t[numLocalExperts * world_size];
+	uint64_t *numTokensBuffer_h = new uint64_t[numExperts];
 	cudaMemcpy(
 		numTokensBuffer_h,
 		numTokensBuffer,
-		numLocalExperts * world_size * sizeof(uint64_t),
+		numExperts * sizeof(uint64_t),
 		cudaMemcpyDeviceToHost
 	);
-	std::byte *xDispatchOut_h = new std::byte[world_size * numLocalExperts * maxNumTokens * perTokenBytes];
+	std::byte *xDispatchOut_h = new std::byte[numExperts * maxNumTokens * perTokenBytes];
 	cudaMemcpy(
 		xDispatchOut_h,
 		xDispatchOut,
-		world_size * numLocalExperts * maxNumTokens * perTokenBytes * sizeof(std::byte),
+		numExperts * maxNumTokens * perTokenBytes * sizeof(std::byte),
 		cudaMemcpyDeviceToHost
 	);
 
@@ -222,7 +223,12 @@ void AllToAllIntraNode::dispatch (
 		logFile << "\nExpert " << idxExpert << ": received " << recvTokens_h[j] << " tokens in total, details as follows:\n";
 		for (int i = 0; i < world_size; i++) {
 			for (int k = 0; k < maxNumTokens; k++) {
-				uint32_t* first_val_ptr = (uint32_t*)(xDispatchOut_h + i * numLocalExperts * maxNumTokens * perTokenBytes + j * maxNumTokens * perTokenBytes + k * perTokenBytes);
+				uint32_t* first_val_ptr = (uint32_t*)(
+					xDispatchOut_h + 
+					i * numLocalExperts * maxNumTokens * perTokenBytes + 
+					j * maxNumTokens * perTokenBytes + 
+					k * perTokenBytes
+				);
 				if (*first_val_ptr == 0) continue;
 
 				logFile << "> Received token from rank " << i << ": ";
