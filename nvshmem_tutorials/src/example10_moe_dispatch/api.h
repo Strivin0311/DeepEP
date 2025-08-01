@@ -65,17 +65,17 @@ inline void print_transfer_information (
     unsigned rank,
     std::ofstream &logFile
 ) {
-    for (int i = 0; i < localTokens; i ++) {
-        logFile << "Token " << i << ": ";
-        for (int j = 0; j < hiddenDim; j ++) {
-            logFile << tokens_h[i * hiddenDim + j] << " ";
+    for (int i = 0; i < localTokens; ++i) {
+        logFile << "Token " << i << ": [";
+        for (int j = 0; j < hiddenDim; ++j) {
+            logFile << tokens_h[i * hiddenDim + j];
+            if (j < hiddenDim - 1) {
+                logFile << " ";
+            }
         }
-        logFile << "\n";
-    }
-    for (int i = 0; i < localTokens; i ++) {
-        logFile << "Token " << i << " will tranmit to expert: ";
-        for (int j = 0; j < expertsPerToken; j ++) {
-            logFile << indices_h[i * expertsPerToken + j] << " ";
+        logFile << "]" << " will tranmit to expert: ";
+        for (int k = 0; k < expertsPerToken; ++k) {
+            logFile << indices_h[i * expertsPerToken + k] << " ";
         }
         logFile << "\n";
     }

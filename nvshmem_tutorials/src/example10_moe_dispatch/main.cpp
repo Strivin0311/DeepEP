@@ -26,20 +26,20 @@ void testDispatch(
 ) {
     // check
     assert(numExperts % world_size == 0);
-    assert(numExperts / world_size == expertsPerToken);
+    assert(numExperts / world_size == expertsPerToken); // why topk == num_local_experts
     uint32_t numLocalExperts = numExperts / world_size;
 
     // init tokens on host
     // e.g. rank0 will have tokens (shape=[localTokens * hiddenDim,]):
-    //      Token 0: 10 10 10 
-    //      Token 1: 11 11 11 
-    //      Token 2: 12 12 12 
-    //      Token 3: 13 13 13 
+    //      Token 0: [10 10 10] 
+    //      Token 1: [11 11 11] 
+    //      Token 2: [12 12 12] 
+    //      Token 3: [13 13 13] 
     // and rank1 will have tokens:
-    //      Token 0: 14 14 14 
-    //      Token 1: 15 15 15 
-    //      Token 2: 16 16 16 
-    //      Token 3: 17 17 17
+    //      Token 0: [14 14 14] 
+    //      Token 1: [15 15 15] 
+    //      Token 2: [16 16 16] 
+    //      Token 3: [17 17 17]
     std::vector<uint32_t> tokens_h(localTokens * hiddenDim);
     for (int i = 0; i < localTokens; ++i) {
         for (int j = 0; j < hiddenDim; ++j) {

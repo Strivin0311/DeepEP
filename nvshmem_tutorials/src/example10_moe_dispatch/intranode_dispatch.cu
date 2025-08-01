@@ -194,7 +194,7 @@ void AllToAllIntraNode::dispatch (
 	// wait for kernel to finish
 	cudaDeviceSynchronize();
 
-	// copy data to host
+	// copy device results to host
 	uint64_t *numTokensBuffer_h = new uint64_t[numExperts];
 	cudaMemcpy(
 		numTokensBuffer_h,
@@ -211,6 +211,7 @@ void AllToAllIntraNode::dispatch (
 	);
 
 	// stats and print the result
+	// recvTokens_h[j]: the number of tokens received by jth local expert
 	std::vector<int> recvTokens_h(numLocalExperts, 0);
 	for (int i = 0; i < world_size; i++) {
 		for (int j = 0; j < numLocalExperts; j++) {
@@ -220,9 +221,11 @@ void AllToAllIntraNode::dispatch (
 	}
 	for (int j = 0; j < numLocalExperts; j++) {
 		int idxExpert = rank * numLocalExperts + j;
-		logFile << "\nExpert " << idxExpert << ": received " << recvTokens_h[j] << " tokens in total, details as follows:\n";
+		logFile << "\nExpert " << idxExpert << "(Local Expert " << j << ")" << ": received " << recvTokens_h[j] << " tokens in total, details as follows:\n\n";
 		for (int i = 0; i < world_size; i++) {
 			for (int k = 0; k < maxNumTokens; k++) {
+				// xDispatchOut_h[i * numLocalExperts * maxNumTokens * perTokenBytes + j * maxNumTokens * perTokenBytes + k * perTokenBytes]:
+				// the kth token received from ranki for jth local expert
 				uint32_t* first_val_ptr = (uint32_t*)(
 					xDispatchOut_h + 
 					i * numLocalExperts * maxNumTokens * perTokenBytes + 
@@ -231,12 +234,16 @@ void AllToAllIntraNode::dispatch (
 				);
 				if (*first_val_ptr == 0) continue;
 
-				logFile << "> Received token from rank " << i << ": ";
-				for (int w = 0; w < perTokenBytes / sizeof(uint32_t); w += 1) {
-					uint32_t val = *(first_val_ptr + w);
-					logFile << val << " "; 
+				logFile << "> Received token from rank " << i << ": [";
+
+				for (int h = 0; h < hiddenDim; ++h) {
+					uint32_t val = *(first_val_ptr + h);
+					logFile << val;
+					if (h < hiddenDim - 1) {
+						logFile << " ";
+					}
 				}
-				logFile << "\n";
+				logFile << "]\n";
 			}
 		}
 		logFile << "\n";
