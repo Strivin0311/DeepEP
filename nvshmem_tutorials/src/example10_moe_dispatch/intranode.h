@@ -57,12 +57,14 @@ namespace ship {
             Assert(numExperts % world_size == 0, "numExperts should be divisible by world_size");
             numLocalExperts = numExperts / world_size;
 
-            // numTokensBuffer[i * numLocalExperts + j]: the num of tokens received from ranki for jth local expert
+            // numTokensBuffer[i * numLocalExperts + j]: the num of tokens plus 1 received from ranki for jth local expert
+            // as the signal
             numTokensBuffer = (uint64_t *)nvshmem_malloc(sizeof(uint64_t) * numExperts);
             Assert(numTokensBuffer != nullptr, "Failed to allocate numTokensBuffer");
             cudaMemset(numTokensBuffer, 0, sizeof(uint64_t) * numExperts);
 
-            // REVIEW: what does this do?
+            // numDispatchRecvBuffer[i * numLocalExperts + j]: the num of tokens received from ranki for jth local expert
+            // as both the signal and the data
             numDispatchRecvBuffer = (uint64_t *)nvshmem_malloc(sizeof(uint64_t) * numExperts);
             Assert(numDispatchRecvBuffer != nullptr, "Failed to allocate numDispatchRecvBuffer");
             cudaMemset(numDispatchRecvBuffer, 0, sizeof(uint64_t) * numExperts);

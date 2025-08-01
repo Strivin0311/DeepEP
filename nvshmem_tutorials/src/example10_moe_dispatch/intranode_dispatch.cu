@@ -124,10 +124,6 @@ __global__ void dispatchKernel (
 
 	if constexpr (isRecv) {
 		for (int i = blockId * blockDim.x + threadIdx.x; i < numExperts; i += gridDim.x * blockDim.x) {
-			// const uint32_t srcRank = i / numLocalExperts;
-			// const uint32_t srcLocalExpert = i % numLocalExperts;
-			// const uint32_t dstLocalExpert = dstExpert % numLocalExperts;
-
 			// Wait for the token count to be set.
 			nvshmem_uint64_wait_until(
 				numTokensBuffer + i,
@@ -140,10 +136,6 @@ __global__ void dispatchKernel (
 				NVSHMEM_CMP_EQ, 
 				numTokens
 			);
-
-			// Clean the buffers.
-			// numTokensBuffer[i] = 0;
-			// numRecvBuffer[i] = 0;
 		}
 		cg::this_grid().sync();
 	}
@@ -202,6 +194,13 @@ void AllToAllIntraNode::dispatch (
 		numExperts * sizeof(uint64_t),
 		cudaMemcpyDeviceToHost
 	);
+	uint64_t *numDispatchRecvBuffer_h = new uint64_t[numExperts];
+	cudaMemcpy(
+		numDispatchRecvBuffer_h,
+		numDispatchRecvBuffer,
+		numExperts * sizeof(uint64_t),
+		cudaMemcpyDeviceToHost
+	);
 	std::byte *xDispatchOut_h = new std::byte[numExperts * maxNumTokens * perTokenBytes];
 	cudaMemcpy(
 		xDispatchOut_h,
@@ -210,15 +209,21 @@ void AllToAllIntraNode::dispatch (
 		cudaMemcpyDeviceToHost
 	);
 
+	// sanity check
+	for (int i = 0; i < numExperts; i++) {
+		assert(numTokensBuffer_h[i] -1 == numDispatchRecvBuffer_h[i]);
+	}
+
 	// stats and print the result
 	// recvTokens_h[j]: the number of tokens received by jth local expert
 	std::vector<int> recvTokens_h(numLocalExperts, 0);
 	for (int i = 0; i < world_size; i++) {
 		for (int j = 0; j < numLocalExperts; j++) {
-			int recvTokens = numTokensBuffer_h[i * numLocalExperts + j] - 1;
+			int recvTokens = numDispatchRecvBuffer_h[i * numLocalExperts + j];
 			recvTokens_h[j] += recvTokens;
 		}
 	}
+
 	for (int j = 0; j < numLocalExperts; j++) {
 		int idxExpert = rank * numLocalExperts + j;
 		logFile << "\nExpert " << idxExpert << "(Local Expert " << j << ")" << ": received " << recvTokens_h[j] << " tokens in total, details as follows:\n\n";
@@ -251,5 +256,6 @@ void AllToAllIntraNode::dispatch (
 
 	// free host memory
 	delete[] numTokensBuffer_h;
+	delete[] numDispatchRecvBuffer_h;
 	delete[] xDispatchOut_h;
 }
