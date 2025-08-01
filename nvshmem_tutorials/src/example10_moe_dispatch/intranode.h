@@ -29,7 +29,7 @@ namespace ship {
         uint32_t world_size;
         uint32_t localTokens;
         uint32_t hiddenDim;
-        uint32_t hiddenDimBytes; // The number of bytes for each token
+        uint32_t perTokenBytes; // The number of bytes for each token
         uint32_t numExperts;      // For the whole world
         uint32_t expertsPerToken; // The number of experts per token.
         uint32_t maxNumTokens;    // Each rank be allowed to send maxNumTokens tokens
@@ -40,7 +40,7 @@ namespace ship {
             uint32_t world_size,
             uint32_t localTokens, /* local seqlen */
             uint32_t hiddenDim,
-            uint32_t hiddenDimBytes,
+            uint32_t perTokenBytes,
             uint32_t numExperts,
             uint32_t expertsPerToken, /* topk */
             uint32_t maxNumTokens /* capacity */
@@ -49,7 +49,7 @@ namespace ship {
             world_size(world_size),
             localTokens(localTokens),
             hiddenDim(hiddenDim),
-            hiddenDimBytes(hiddenDimBytes),
+            perTokenBytes(perTokenBytes),
             numExperts(numExperts),
             expertsPerToken(expertsPerToken),
             maxNumTokens(maxNumTokens)
@@ -68,7 +68,6 @@ namespace ship {
             cudaMemset(numDispatchRecvBuffer, 0, sizeof(uint64_t) * numExperts);
 
             // REVIEW: what does this do?
-            uint32_t perTokenBytes = hiddenDimBytes;
             xDispatchOut = (std::byte *)nvshmem_malloc(numExperts * maxNumTokens * perTokenBytes);
             Assert(xDispatchOut != nullptr, "Failed to allocate xDispatchOut");
         }

@@ -17,7 +17,7 @@ __global__ void dispatchKernel (
 	uint32_t rank,
 	uint32_t localTokens,
 	uint32_t hiddenDim,
-	uint32_t hiddenDimBytes,
+	uint32_t perTokenBytes,
 	uint32_t numLocalExperts,
 	uint32_t expertsPerToken,
 	uint32_t worldSize,
@@ -36,8 +36,6 @@ __global__ void dispatchKernel (
 	const unsigned blockId = blockIdx.x;
 	const unsigned warpId = threadIdx.x / WARP_SIZE;
 	const unsigned laneId = threadIdx.x % WARP_SIZE;
-
-	const unsigned tokenDim = hiddenDimBytes;
 
 	if constexpr (isSend) {
 		// tokenIndex[i] identifies the number of tokens have assigned to the local expert i just in this rank.
@@ -106,9 +104,9 @@ __global__ void dispatchKernel (
 							// xDispatchOut[i][j][k]: rank(i) transfer token to expert(j) which in dstRank.
 							// Because each expert which in dstRank could receive maxNumTokens tokens,
 							// only the whole row of xDispatchOut[rank][dstLocalExpert][tokenIndex] can be chosen when this PE=rank.
-							xDispatchOut + ((dstLocalExpert + rank * numLocalExperts) * maxNumTokens + index) * tokenDim,
-							(std::byte *)tokens + i * tokenDim,
-							tokenDim, // num bytes
+							xDispatchOut + ((dstLocalExpert + rank * numLocalExperts) * maxNumTokens + index) * perTokenBytes,
+							(std::byte *)tokens + i * perTokenBytes,
+							perTokenBytes, // num bytes
 							// numRecvBuffer same as numTokenBuffer.
 							numRecvBuffer + dstLocalExpert + rank * numLocalExperts,
 							1,
@@ -168,7 +166,7 @@ void AllToAllIntraNode::dispatch (
 		const_cast<uint32_t*>(&rank),
 		const_cast<uint32_t*>(&localTokens),
 		const_cast<uint32_t*>(&hiddenDim),
-		const_cast<uint32_t*>(&hiddenDimBytes),
+		const_cast<uint32_t*>(&perTokenBytes),
 		const_cast<uint32_t*>(&numLocalExperts),
 		const_cast<uint32_t*>(&expertsPerToken),
 		const_cast<uint32_t*>(&world_size),
@@ -203,11 +201,11 @@ void AllToAllIntraNode::dispatch (
 		numLocalExperts * world_size * sizeof(uint64_t),
 		cudaMemcpyDeviceToHost
 	);
-	std::byte *xDispatchOut_h = new std::byte[world_size * numLocalExperts * maxNumTokens * hiddenDimBytes];
+	std::byte *xDispatchOut_h = new std::byte[world_size * numLocalExperts * maxNumTokens * perTokenBytes];
 	cudaMemcpy(
 		xDispatchOut_h,
 		xDispatchOut,
-		world_size * numLocalExperts * maxNumTokens * hiddenDimBytes * sizeof(std::byte),
+		world_size * numLocalExperts * maxNumTokens * perTokenBytes * sizeof(std::byte),
 		cudaMemcpyDeviceToHost
 	);
 
@@ -224,11 +222,11 @@ void AllToAllIntraNode::dispatch (
 		logFile << "\nExpert " << idxExpert << ": received " << recvTokens_h[j] << " tokens in total, details as follows:\n";
 		for (int i = 0; i < world_size; i++) {
 			for (int k = 0; k < maxNumTokens; k++) {
-				uint32_t* first_val_ptr = (uint32_t*)(xDispatchOut_h + i * numLocalExperts * maxNumTokens * hiddenDimBytes + j * maxNumTokens * hiddenDimBytes + k * hiddenDimBytes);
+				uint32_t* first_val_ptr = (uint32_t*)(xDispatchOut_h + i * numLocalExperts * maxNumTokens * perTokenBytes + j * maxNumTokens * perTokenBytes + k * perTokenBytes);
 				if (*first_val_ptr == 0) continue;
 
 				logFile << "> Received token from rank " << i << ": ";
-				for (int w = 0; w < hiddenDimBytes / sizeof(uint32_t); w += 1) {
+				for (int w = 0; w < perTokenBytes / sizeof(uint32_t); w += 1) {
 					uint32_t val = *(first_val_ptr + w);
 					logFile << val << " "; 
 				}

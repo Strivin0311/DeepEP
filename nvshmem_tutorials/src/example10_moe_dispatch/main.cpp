@@ -94,14 +94,14 @@ void testDispatch(
     // init device buffers from host
     DeviceBuffer<uint32_t> tokens_d(tokens_h);
     DeviceBuffer<uint32_t> indices_d(indices_h);
-    const uint32_t hiddenDimBytes = hiddenDim * sizeof(tokens_d.getElementSize());
+    const uint32_t perTokenBytes = hiddenDim * sizeof(tokens_d.getElementSize());
 
     AllToAllIntraNode allToAllIntranode(
         rank,
         world_size,
         localTokens,
         hiddenDim,
-        hiddenDimBytes,
+        perTokenBytes,
         numExperts,
         expertsPerToken,
         maxNumTokens
