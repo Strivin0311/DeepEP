@@ -8,11 +8,11 @@
 #include "intranode.h"
 #include "api.h"
 
-#ifndef SHIP_LOG_PREFIX
-#define SHIP_LOG_PREFIX "log/rank_"
+#ifndef KATO_LOG_PREFIX
+#define KATO_LOG_PREFIX "log/rank_"
 #endif
 
-using namespace ship;
+using namespace kato;
 
 void testDispatch(
     // cudaStream_t stream,
@@ -47,7 +47,7 @@ void testDispatch(
     }
     
     // print expected information
-    std::ofstream logFile(SHIP_LOG_PREFIX + std::to_string(rank) + ".log");
+    std::ofstream logFile(KATO_LOG_PREFIX + std::to_string(rank) + ".log");
     logFile << "Total ranks (world size): " << world_size << "\n";
     logFile << "Each rank will transfer unique tokens num (local seqlen): " << localTokens << "\n";
     logFile << "Each rank have experts num (num of local experts): " << numLocalExperts << "\n";

@@ -6,7 +6,7 @@
 #include "intranode.h"
 #include "cuda_utils.h"
 
-using namespace ship;
+using namespace kato;
 
 template <bool isSend, bool isRecv>
 __global__ void dispatchKernel (

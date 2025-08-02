@@ -1,5 +1,5 @@
-#ifndef SHIP_INTRANODE_H 
-#define SHIP_INTRANODE_H
+#ifndef KATO_INTRANODE_H 
+#define KATO_INTRANODE_H
 #include <cstdint>
 #include <nvshmem.h>
 #include <cuda_runtime.h>
@@ -17,7 +17,7 @@ namespace {
     }
 } // namespace
 
-namespace ship {
+namespace kato {
     enum {
         SEND,
         RECV,
@@ -100,4 +100,4 @@ namespace ship {
     };
 }
 
-#endif // SHIP_uint32_tRANODE_H
+#endif // KATO_uint32_tRANODE_H

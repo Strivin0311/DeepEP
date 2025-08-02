@@ -1,7 +1,7 @@
 #ifndef CUDA_UTILS_H
 #define CUDA_UTILS_H
 
-namespace ship {
+namespace kato {
     namespace device {
     __forceinline__ __device__ unsigned warp_sum(unsigned value) {
       value += __shfl_xor_sync(0xffffffff, value, 16);
@@ -17,6 +17,6 @@ namespace ship {
     template <typename T> __device__ T round_up(T x, T y) { return ceil_div<T>(x, y) * y; }
     
     } // namespace device
-} // namespace ship
+} // namespace kato
 
 #endif

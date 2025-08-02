@@ -1,5 +1,5 @@
-#ifndef _API_H_
-#define _API_H_
+#ifndef KATO_API_H
+#define KATO_API_H
 #include <cstdint>
 #include <iostream>
 #include <vector>

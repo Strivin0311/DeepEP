@@ -1,5 +1,5 @@
-#ifndef SHIP_BUFFER_H
-#define SHIP_BUFFER_H
+#ifndef KATO_BUFFER_H
+#define KATO_BUFFER_H
 
 #include <cerrno>
 #include <cstdint>
@@ -7,7 +7,7 @@
 #include <vector>
 #include <cuda_runtime.h>
 
-namespace ship {
+namespace kato {
 
     template <typename T> struct DeviceBuffer {
         uint32_t size;
@@ -32,6 +32,6 @@ namespace ship {
         ~DeviceBuffer() { cudaFree(data); }
     };
 
-} // namespace ship
+} // namespace kato
 
 #endif
