@@ -18,15 +18,14 @@ void testDispatch(
     // cudaStream_t stream,
     unsigned rank,
     unsigned world_size,
-    uint32_t localTokens = 4, /* local seqlen */
+    uint32_t localTokens = 5, /* local seqlen */
     uint32_t hiddenDim = 3,
-    uint32_t numExperts = 8,
-    uint32_t expertsPerToken = 2, /* topk = 2 */
-    uint32_t maxNumTokens = 10 /* capacity = 10 */
+    uint32_t numExperts = 16,
+    uint32_t expertsPerToken = 2, /* topk */
+    uint32_t maxNumTokens = 8 /* capacity for each rank */
 ) {
     // check
     assert(numExperts % world_size == 0);
-    assert(numExperts / world_size == expertsPerToken); // why topk == num_local_experts ?
     uint32_t numLocalExperts = numExperts / world_size;
 
     // init tokens on host
@@ -54,46 +53,52 @@ void testDispatch(
     logFile << "Each rank have experts num (num of local experts): " << numLocalExperts << "\n";
     logFile << "Each token have experts num (topk): " << expertsPerToken << "\n";
     logFile << "Each rank will transfer repeated tokens num (local seqlen x topk): " << localTokens * expertsPerToken << "\n";
+    logFile << "Each rank has the receive capacity: " << maxNumTokens * world_size << "\n";
     logFile << "\n";
 
     // init transfer indices on host
-    // where indices_h[i * expertsPerToken + j] indicates the jth expert index for local token i to send to
+    // where indices_h[r][i * expertsPerToken + j] indicates the jth expert index of local token i to send to for rank r
     // e.g. for rank0, its first token (i=0) will be send to 7th expert and 4th expert
     // and its last token (i=3) will be send to 0th expert and 5th expert
-    // then indices_h[0] = 7, indices_h[1] = 4, indices_h[6] = 0, indices_h[7] = 5
-    std::vector<uint32_t> indices_h(localTokens * expertsPerToken, 0);
-    for (int i = 0; i < localTokens; ++i) {
-        // For each token, assign it to other rank
-        for (int j = 0; j < expertsPerToken; ++j) {
-            // indices_h[i * expertsPerToken + j] = j;
-
-            // every odd/even rank assign all tokens to the experts which in the paired even/odd rank
-            // indices_h[i * expertsPerToken + j] = (rank ^ 0x1) * numLocalExperts + j;
-
-            // assign each token to the experts which in the same rank
-            // indices_h[i * expertsPerToken + j] = (rank ^ i) * numLocalExperts + j;
-
-            // mixed assign
-            indices_h[i * expertsPerToken + j] = (rank * 17 + i * 11 + j * 13 + 23) % numExperts;
-        }
+    // then indices_h[0][0] = 7, indices_h[0][1] = 4, indices_h[0][6] = 0, indices_h[0][7] = 5
+    std::vector<std::vector<uint32_t>> indices_h(world_size, std::vector<uint32_t>(localTokens * expertsPerToken, 0));
+    for (int r = 0; r < world_size; ++r) {
+        for (int i = 0; i < localTokens; ++i) {
+            // For each token, assign it to other rank
+            for (int j = 0; j < expertsPerToken; ++j) {
+                // mixed assign
+                indices_h[r][i * expertsPerToken + j] = (r * 17 + i * 11 + j * 13 + 23) % numExperts;
+            }
+        }   
     }
 
     // sanity check
     for (int i = 0; i < localTokens; ++i) {
         for (int j = 1; j < expertsPerToken; ++j) {
             Assert(
-                indices_h[i * expertsPerToken] != indices_h[i * expertsPerToken + j], 
+                indices_h[rank][i * expertsPerToken] != indices_h[rank][i * expertsPerToken + j], 
                 "The same token should not be assigned to the same expert"
             );
         }
     }
     
     // print transfer information
-    print_transfer_information(tokens_h, indices_h, localTokens, hiddenDim, expertsPerToken, rank, logFile);
+    print_transfer_information(
+        tokens_h, 
+        const_cast<const std::vector<std::vector<uint32_t>> &>(indices_h), 
+        numLocalExperts,
+        localTokens, 
+        hiddenDim, 
+        expertsPerToken, 
+        maxNumTokens,
+        rank, 
+        world_size,
+        logFile
+    );
 
     // init device buffers from host
     DeviceBuffer<uint32_t> tokens_d(tokens_h);
-    DeviceBuffer<uint32_t> indices_d(indices_h);
+    DeviceBuffer<uint32_t> indices_d(indices_h[rank]);
     const uint32_t perTokenBytes = hiddenDim * sizeof(tokens_d.getElementSize());
 
     AllToAllIntraNode allToAllIntranode(

@@ -8,10 +8,6 @@
 
 using namespace ship;
 
-namespace cg = cooperative_groups;
-
-__device__ float clockRate_d;
-
 template <bool isSend, bool isRecv>
 __global__ void dispatchKernel (
 	uint32_t rank,
@@ -37,6 +33,7 @@ __global__ void dispatchKernel (
 	const unsigned warpId = threadIdx.x / WARP_SIZE;
 	const unsigned laneId = threadIdx.x % WARP_SIZE;
 
+	// for send
 	if constexpr (isSend) {
 		// init tokenCount with size `numExperts` for each block
 		// where tokenCount[i] identifies the number of tokens assigned to expert i of this rank.
@@ -135,13 +132,9 @@ __global__ void dispatchKernel (
 				}
 			} 
 		}
-
-		// REVIEW: do we need to sync all blocks to let all send tasks launched before recv tasks?
-		// I think it is not necessary
-		// if constexpr (isRecv)
-		// 	cg::this_grid().sync();
 	}
-
+	
+	// for recv
 	if constexpr (isRecv) {
 		// each thread of the whole grid handle one expert
 		for (int i = blockId * blockDim.x + threadIdx.x; i < numExperts; i += gridDim.x * blockDim.x) {
@@ -251,7 +244,7 @@ void AllToAllIntraNode::dispatch (
 
 	for (int j = 0; j < numLocalExperts; j++) {
 		int idxExpert = rank * numLocalExperts + j;
-		logFile << "\nExpert " << idxExpert << "(Local Expert " << j << ")" << ": received " << recvTokens_h[j] << " tokens in total, details as follows:\n\n";
+		logFile << "\nExpert " << idxExpert << " (Local Expert " << j << ")" << ": received " << recvTokens_h[j] << " tokens in total, details as follows:\n\n";
 		for (int i = 0; i < world_size; i++) {
 			for (int k = 0; k < maxNumTokens; k++) {
 				// xDispatchOut_h[i * numLocalExperts * maxNumTokens * perTokenBytes + j * maxNumTokens * perTokenBytes + k * perTokenBytes]:

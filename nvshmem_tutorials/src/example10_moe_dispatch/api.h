@@ -58,11 +58,14 @@ inline uint32_t ceil_div(uint32_t x, uint32_t y) {
 
 inline void print_transfer_information (
     const std::vector<uint32_t> &tokens_h,
-    const std::vector<uint32_t> &indices_h,
+    const std::vector<std::vector<uint32_t>> &indices_h,
+    uint32_t numLocalExperts,
     uint32_t localTokens,
     uint32_t hiddenDim,
     uint32_t expertsPerToken,
+    uint32_t maxNumTokens,
     unsigned rank,
+    unsigned world_size,
     std::ofstream &logFile
 ) {
     for (int i = 0; i < localTokens; ++i) {
@@ -75,10 +78,38 @@ inline void print_transfer_information (
         }
         logFile << "]" << " will tranmit to expert: ";
         for (int k = 0; k < expertsPerToken; ++k) {
-            logFile << indices_h[i * expertsPerToken + k] << " ";
+            logFile << indices_h[rank][i * expertsPerToken + k] << " ";
         }
         logFile << "\n";
+    } logFile << "\n";
+
+    // construct and print the received token counter for local experts of this rank
+    std::vector<uint32_t> count_recv_h(numLocalExperts, 0);
+    for (int r=0; r < world_size; ++r) {
+        for (int i = 0; i < localTokens; ++i) {
+            for (int k = 0; k < expertsPerToken; ++k) {
+                auto dstExpert = indices_h[r][i * expertsPerToken + k];
+                auto dstRank = dstExpert / numLocalExperts;
+                if (dstRank == rank) {
+                    auto dstLocalExpert = dstExpert % numLocalExperts;
+                    count_recv_h[dstLocalExpert]++;
+                }
+            }
+        }
     }
+    auto capacity = maxNumTokens * world_size;
+    for (int i = 0; i < numLocalExperts; ++i) {
+        auto glocalExpertIdx = rank * numLocalExperts + i;
+        logFile << "Local expert " << i << " (Global expert " << glocalExpertIdx << ")" << " should have receive ";
+        logFile << count_recv_h[i] << " tokens";
+        if (count_recv_h[i] > capacity) {
+            logFile << " (over the capacity of " << capacity << ")";
+        } 
+        else{
+            logFile << " (within the capacity of " << capacity << ")";
+        }
+        logFile << "\n";
+    } logFile << "\n";
 }
 
 #endif
