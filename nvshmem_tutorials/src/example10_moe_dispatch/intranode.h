@@ -58,13 +58,17 @@ namespace ship {
             numLocalExperts = numExperts / world_size;
 
             // numTokensBuffer[i * numLocalExperts + j]: the num of tokens plus 1 received from ranki for jth local expert
-            // as the signal
+            // as the signal to indicate the total number of tokens received
+            // NOTE: +1 because we need to wait the signal to be updated at least once
+            // thus if we send 0 token to the dstExpert, the signal will not be updated
+            // hence we never know if the signal is ready for receving 0 token 
+            // or the signal for receiving non-zero tokens is not ready
             numTokensBuffer = (uint64_t *)nvshmem_malloc(sizeof(uint64_t) * numExperts);
             Assert(numTokensBuffer != nullptr, "Failed to allocate numTokensBuffer");
             cudaMemset(numTokensBuffer, 0, sizeof(uint64_t) * numExperts);
 
             // numDispatchRecvBuffer[i * numLocalExperts + j]: the num of tokens received from ranki for jth local expert
-            // as both the signal and the data
+            // as the signal to indicate how many tokens have been received so far
             numDispatchRecvBuffer = (uint64_t *)nvshmem_malloc(sizeof(uint64_t) * numExperts);
             Assert(numDispatchRecvBuffer != nullptr, "Failed to allocate numDispatchRecvBuffer");
             cudaMemset(numDispatchRecvBuffer, 0, sizeof(uint64_t) * numExperts);
@@ -75,15 +79,11 @@ namespace ship {
             Assert(xDispatchOut != nullptr, "Failed to allocate xDispatchOut");
         }
         
-        // Storage the number of tokens for each local expert
-        // Each rank will receive its tokens to the local experts
         // 64bit type for nvshmemx_signal_op
         uint64_t *numTokensBuffer = nullptr;
-
-        // Size is similar to numTokensBuffer
-        // Each rank will receive its tokens from the local experts
         uint64_t *numDispatchRecvBuffer = nullptr;
 
+        // byte type for token data
         std::byte *xDispatchOut = nullptr;
 
         void dispatch(

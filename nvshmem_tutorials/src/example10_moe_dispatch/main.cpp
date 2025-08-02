@@ -26,7 +26,7 @@ void testDispatch(
 ) {
     // check
     assert(numExperts % world_size == 0);
-    assert(numExperts / world_size == expertsPerToken); // why topk == num_local_experts
+    assert(numExperts / world_size == expertsPerToken); // why topk == num_local_experts ?
     uint32_t numLocalExperts = numExperts / world_size;
 
     // init tokens on host
