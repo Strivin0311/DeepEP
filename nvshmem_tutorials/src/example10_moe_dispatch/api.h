@@ -15,21 +15,6 @@
 
 #define dbg(a) std::cout << #a << " : " << (a) << std::endl
 
-#define PRINT_RESULT(condition) \
-    do { \
-        if (condition) { \
-            std::cout << "\033[1;32mPASS\033[0m" << std::endl; /* Green */ \
-        } else { \
-            std::cout << "\033[1;31mFAIL\033[0m" << std::endl; /* Red */ \
-        } \
-    } while (0)
-
-#define Log(format, ...) \
-    do { \
-        printf(ANSI_FMT("[%s:%d %s] " format, BLUE_TXT) "\n", \
-        __FILE__, __LINE__, __func__, ## __VA_ARGS__); \
-    } while(0)
-
 inline void assert_fail_msg(const char* msg) {
     printf(RED_TXT "%s\n" RESET_TXT, msg);
 }
@@ -58,7 +43,7 @@ inline uint32_t ceil_div(uint32_t x, uint32_t y) {
 
 inline void print_transfer_information (
     const std::vector<uint32_t> &tokens_h,
-    const std::vector<std::vector<uint32_t>> &indices_h,
+    const std::vector<std::vector<uint32_t>> &indices_per_rank_h,
     uint32_t numLocalExperts,
     uint32_t localTokens,
     uint32_t hiddenDim,
@@ -68,6 +53,20 @@ inline void print_transfer_information (
     unsigned world_size,
     std::ofstream &logFile
 ) {
+    // sanity check
+    for (int i = 0; i < localTokens; ++i) {
+        for (int j = 1; j < expertsPerToken; ++j) {
+            Assert(
+                indices_per_rank_h[rank][i * expertsPerToken] != indices_per_rank_h[rank][i * expertsPerToken + j], 
+                "The same token should not be assigned to the same expert"
+            );
+        }
+    }
+
+    logFile << "\n\n\n--------------Log Send Info Start----------------\n\n\n";
+
+    // print the send info of this rank about
+    // each local token transfering each top-k replica to which expert
     for (int i = 0; i < localTokens; ++i) {
         logFile << "Token " << i << ": [";
         for (int j = 0; j < hiddenDim; ++j) {
@@ -76,19 +75,23 @@ inline void print_transfer_information (
                 logFile << " ";
             }
         }
-        logFile << "]" << " will tranmit to expert: ";
+        logFile << "]" << " will tranfer to expert: ";
         for (int k = 0; k < expertsPerToken; ++k) {
-            logFile << indices_h[rank][i * expertsPerToken + k] << " ";
+            logFile << indices_per_rank_h[rank][i * expertsPerToken + k] << " ";
         }
         logFile << "\n";
-    } logFile << "\n";
+    }
+
+    logFile << "\n\n\n--------------Log Send Info End----------------\n\n\n";
+
+    logFile << "\n\n\n--------------Log Recv Info Start----------------\n\n\n";
 
     // construct and print the received token counter for local experts of this rank
     std::vector<uint32_t> count_recv_h(numLocalExperts, 0);
     for (int r=0; r < world_size; ++r) {
         for (int i = 0; i < localTokens; ++i) {
             for (int k = 0; k < expertsPerToken; ++k) {
-                auto dstExpert = indices_h[r][i * expertsPerToken + k];
+                auto dstExpert = indices_per_rank_h[r][i * expertsPerToken + k];
                 auto dstRank = dstExpert / numLocalExperts;
                 if (dstRank == rank) {
                     auto dstLocalExpert = dstExpert % numLocalExperts;
@@ -109,7 +112,9 @@ inline void print_transfer_information (
             logFile << " (within the capacity of " << capacity << ")";
         }
         logFile << "\n";
-    } logFile << "\n";
+    }
+
+    logFile << "\n\n\n--------------Log Recv Info End----------------\n\n\n";
 }
 
 #endif
