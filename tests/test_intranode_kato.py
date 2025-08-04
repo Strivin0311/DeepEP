@@ -18,11 +18,19 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
     # Settings
     num_tokens, hidden = args.num_tokens, args.hidden
     num_topk, num_experts = args.num_topk, args.num_experts
+    num_channels = num_sms // 2 # one channel use two blocks, even-numbered blocks for sending, odd-numbered blocks for receiving
 
     assert num_experts % num_ranks == 0
     num_local_experts = num_experts // num_ranks
     if local_rank == 0:
-        print(f'[config] {num_experts=} | {num_tokens=} | {hidden=} | {num_topk=} | {num_local_experts=}\n', flush=True)
+        print(
+            (
+                f"[config] {num_sms=} | {num_channels=} | "
+                f"{num_experts=} | {num_tokens=} | {hidden=} | "
+                f"{num_topk=} | {num_local_experts=}\n"
+            ), 
+            flush=True
+        )
 
     # Random data
     x = torch.ones((num_tokens, hidden), dtype=torch.bfloat16, device='cuda') * rank
@@ -52,6 +60,7 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
     dist.all_reduce(gbl_num_tokens_per_expert, group=group)
     if local_rank == 0:
         print(f"{gbl_num_tokens_per_expert=}\n", flush=True)
+    print(f"[RANK {rank}]: {num_tokens_per_expert=}\n", flush=True)
 
     # Rank layout meta
     # num_tokens_per_rank[r]: the number of tokens sent to rank r by this rank
@@ -76,6 +85,7 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
     dist.all_reduce(gbl_num_tokens_per_rank, group=group)
     if local_rank == 0:
         print(f"{gbl_num_tokens_per_rank=}\n", flush=True)
+    print(f"[RANK {rank}]: {num_tokens_per_rank=}\n", flush=True)
 
     # get dispatch layout from buffer
     ref_num_tokens_per_rank, ref_num_tokens_per_rdma_rank, ref_num_tokens_per_expert, ref_is_token_in_rank, event_overlap = \
@@ -136,19 +146,18 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
                     # recv_num_tokens_per_expert_list: shape=[num_local_experts,]: the number of tokens to recv for each local expert in this rank
                     # handle: the tuple of some meta tensors that will be passed to combine or cached dispatch
                     # handle[0] (rank_prefix_matrix): shape=[num_ranks, num_ranks]: rank_prefix_matrix[:, r]: the prefix sum of number of tokens sent by each rank to rank r
-                    # handle[1]: shape=[num_ranks, num_sms//2]: what's this ?
-                    # handle[2]: shape=[num_ranks, num_sms//2]: what's this ?
-                    # handle[3]: shape=[num_recv_tokens,]: what's this ?
+                    # handle[1] (channel_prefix_matrix): shape=[num_ranks, num_channels]: the prefix sum of send token end idxs sent by each send-channel
+                    # handle[2] (recv_channel_prefix_matrix): shape=[num_ranks, num_channels]: the prefix sum of recv token start idxs recv by each recv-channel
+                    # handle[3] (recv_src_idx): shape=[num_recv_tokens,]: the original token idx in the sender's buffer of each recv token
                     # handle[4] (is_token_in_rank): shape=[num_tokens, num_ranks]
-                    # handle[5]: shape=[num_tokens, num_ranks]: what's this ?
+                    # handle[5] (send_head): shape=[num_tokens, num_ranks]: TODO: what's this ?
                     recv_x, recv_topk_idx, recv_topk_weights, recv_num_tokens_per_expert_list, handle, event = buffer.dispatch(**dispatch_args)
                     
                     # wait
                     event.current_stream_wait() if async_mode else ()
                     
                     # print
-                    rank_prefix_matrix: torch.Tensor = handle[0]
-                    is_token_in_rank_handle: torch.Tensor = handle[4]
+                    rank_prefix_matrix, channel_prefix_matrix, recv_channel_prefix_matrix, recv_src_idx, is_token_in_rank_handle, send_head = handle
                     if with_topk:
                         print(
                             (
@@ -157,11 +166,11 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
                                 f"{recv_topk_weights.shape=} | {recv_topk_weights[0]=}\n"
                                 f"{len(recv_num_tokens_per_expert_list)=} | {recv_num_tokens_per_expert_list=}\n"
                                 f"{rank_prefix_matrix.shape=} | {rank_prefix_matrix=}\n" # handle[0]
-                                f"{handle[1].shape=} | {handle[1]=}\n" # handle[1]
-                                f"{handle[2].shape=} | {handle[2]=}\n" # handle[2]
-                                f"{handle[3].shape=} | {handle[3]=}\n" # handle[3]
+                                f"{channel_prefix_matrix.shape=} | {channel_prefix_matrix=}\n" # handle[1]
+                                f"{recv_channel_prefix_matrix.shape=} | {recv_channel_prefix_matrix=}\n" # handle[2]
+                                f"{recv_src_idx.shape=} | {recv_src_idx=}\n" # handle[3]
                                 f"{is_token_in_rank_handle.shape=} | {is_token_in_rank_handle=}\n" # handle[4]
-                                f"{handle[5].shape=} | {handle[5]=}\n" # handle[5]
+                                f"{send_head.shape=} | {send_head=}\n" # handle[5]
                             )
                             , flush=True
                         )
@@ -173,11 +182,11 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
                                 f"{recv_topk_weights=}\n"
                                 f"{len(recv_num_tokens_per_expert_list)=} | {recv_num_tokens_per_expert_list=}\n"
                                 f"{rank_prefix_matrix.shape=} | {rank_prefix_matrix=}\n" # handle[0]
-                                f"{handle[1].shape=} | {handle[1]=}\n" # handle[1]
-                                f"{handle[2].shape=} | {handle[2]=}\n" # handle[2]
-                                f"{handle[3].shape=} | {handle[3]=}\n" # handle[3]
+                                f"{channel_prefix_matrix.shape=} | {channel_prefix_matrix=}\n" # handle[1]
+                                f"{recv_channel_prefix_matrix.shape=} | {recv_channel_prefix_matrix=}\n" # handle[2]
+                                f"{recv_src_idx.shape=} | {recv_src_idx=}\n" # handle[3]
                                 f"{is_token_in_rank_handle.shape=} | {is_token_in_rank_handle=}\n" # handle[4]
-                                f"{handle[5].shape=} | {handle[5]=}\n" # handle[5]
+                                f"{send_head.shape=} | {send_head=}\n" # handle[5]
                             )
                             , flush=True
                         )
@@ -187,6 +196,8 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
 
                     # check
                     assert torch.equal(is_token_in_rank_handle, is_token_in_rank)
+                    assert torch.equal(channel_prefix_matrix[:, -1], num_tokens_per_rank)
+                    assert torch.all(recv_channel_prefix_matrix[:, 0] == 0)
                     assert gbl_num_tokens_per_rank[rank].item() == recv_x.size(0), f'{gbl_num_tokens_per_rank[rank].item()} != {recv_x.size(0)}'
                     assert gbl_num_tokens_per_expert.view(num_ranks, -1)[rank].tolist() == recv_num_tokens_per_expert_list
                     if current_x is not x_pure_rand:
@@ -372,12 +383,16 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
 
 # noinspection PyUnboundLocalVariable,PyShadowingNames
 def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
+    # rank: global rank in default group
+    # num_ranks: number of ranks in default group
+    # group: the default world group
     rank, num_ranks, group = init_dist(local_rank, num_local_ranks)
     test_ll_compatibility, num_rdma_bytes = os.environ.get("DEEPEP_TEST_INTRANODE_LOW_LATENCY", "0") == "1", 0
     if test_ll_compatibility:
         ll_num_tokens, ll_hidden, ll_num_experts, ll_num_topk = 16, 5120, 256, 9
         num_rdma_bytes = deep_ep.Buffer.get_low_latency_rdma_size_hint(ll_num_tokens, ll_hidden, num_ranks, ll_num_experts)
         
+    # TODO: why is 2^9 here ?
     num_nvl_bytes = int(2e9)
     num_qps_per_rank = (ll_num_experts // num_ranks if test_ll_compatibility else 1)
     

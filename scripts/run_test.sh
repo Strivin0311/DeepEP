@@ -16,8 +16,8 @@ export NVSHMEM_DISABLE_P2P=0 # set to 0 to enable NVLink in low-latency mode
 #   assert calc_diff(recv_x[:, -1], recv_src_info.view(-1)) < 0.007
 export DEEPEP_TEST_INTRANODE_LOW_LATENCY=0
 
-python tests/test_intranode.py > ${LOG_ROOT}/test_intranode.log 2>&1
-# python tests/test_intranode_kato.py > ${LOG_ROOT}/test_intranode_kato.log 2>&1
+# python tests/test_intranode.py > ${LOG_ROOT}/test_intranode.log 2>&1
+python tests/test_intranode_kato.py > ${LOG_ROOT}/test_intranode_kato.log 2>&1
 
 # ----- test-internode ----- #
 
