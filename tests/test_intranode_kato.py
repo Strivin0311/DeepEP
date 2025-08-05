@@ -19,6 +19,9 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
     num_tokens, hidden = args.num_tokens, args.hidden
     num_topk, num_experts = args.num_topk, args.num_experts
     num_channels = num_sms // 2 # one channel use two blocks, even-numbered blocks for sending, odd-numbered blocks for receiving
+    
+    num_max_nvl_chunked_send_tokens = 8
+    nvl_buffer_size = num_max_nvl_chunked_recv_tokens = 256 # nvl_buffer_size, since the buffer is stored at the receiver side
 
     assert num_experts % num_ranks == 0
     num_local_experts = num_experts // num_ranks
@@ -28,9 +31,19 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
                 f"[config] {num_sms=} | {num_channels=} | "
                 f"{num_experts=} | {num_tokens=} | {hidden=} | "
                 f"{num_topk=} | {num_local_experts=}\n"
+                f"{nvl_buffer_size} | {num_max_nvl_chunked_send_tokens=} | {num_max_nvl_chunked_recv_tokens=}\n"
             ), 
             flush=True
         )
+        
+    # Config
+    config = deep_ep.Config(
+        num_sms, # num_sms, default 20
+        num_max_nvl_chunked_send_tokens, # num_max_nvl_chunked_send_tokens (nvl_chunk_size), default 6
+        num_max_nvl_chunked_recv_tokens, # num_max_nvl_chunked_recv_tokens (nvl_buffer_size), default 256
+        # num_max_rdma_chunked_send_tokens, default 6
+        # num_max_rdma_chunked_recv_tokens, default 256
+    )
 
     # Random data
     x = torch.ones((num_tokens, hidden), dtype=torch.bfloat16, device='cuda') * rank
@@ -102,16 +115,6 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
     group.barrier()
     time.sleep(1)
 
-    # Config
-    nvl_buffer_size = 256
-    config = deep_ep.Config(
-        num_sms, # num_sms, default 20
-        8, # num_max_nvl_chunked_send_tokens (nvl_chunk_size), default 6
-        nvl_buffer_size, # num_max_nvl_chunked_recv_tokens (nvl_buffer_size), default 256
-        # num_max_rdma_chunked_send_tokens, default 6
-        # num_max_rdma_chunked_recv_tokens, default 256
-    )
-
     # Test dispatch
     # noinspection PyShadowingNames
     def check_data(check_x, rank_prefix_matrix):
@@ -142,7 +145,7 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
                     # dispatch
                     # recv_x: shape=[recv_num_tokens, hidden_dim]: the recv tokens for this rank (in rank order just like a2a output, while the boundary is indicated by rank_prefix_matrix)
                     # recv_topk_idx: shape=[recv_num_tokens, topk]: the local expert idx for this rank w.r.t. each recv token's topk list (-1 means not sent to this rank)
-                    # recv_topk_weights: shape=[recv_num_tokens, topk]: the corr. weight for each recv token's topk list
+                    # recv_topk_weights: shape=[recv_num_tokens, topk]: the corr. weight for each recv token's topk list (if idx = -1, then weight = 0.)
                     # recv_num_tokens_per_expert_list: shape=[num_local_experts,]: the number of tokens to recv for each local expert in this rank
                     # handle: the tuple of some meta tensors that will be passed to combine or cached dispatch
                     # handle[0] (rank_prefix_matrix): shape=[num_ranks, num_ranks]: rank_prefix_matrix[:, r]: the prefix sum of number of tokens sent by each rank to rank r
@@ -150,7 +153,8 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
                     # handle[2] (recv_channel_prefix_matrix): shape=[num_ranks, num_channels]: the prefix sum of recv token start idxs recv by each recv-channel
                     # handle[3] (recv_src_idx): shape=[num_recv_tokens,]: the original token idx in the sender's buffer of each recv token
                     # handle[4] (is_token_in_rank): shape=[num_tokens, num_ranks]
-                    # handle[5] (send_head): shape=[num_tokens, num_ranks]: TODO: what's this ?
+                    # handle[5] (send_head): shape=[num_tokens, num_ranks]: the cached_channel_tail_idx of each send token for each rank, 
+                    # and if is_token_in_rank[i, r] == -1, then send_head[i, r] == -1 as well
                     recv_x, recv_topk_idx, recv_topk_weights, recv_num_tokens_per_expert_list, handle, event = buffer.dispatch(**dispatch_args)
                     
                     # wait
@@ -198,6 +202,7 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
                     assert torch.equal(is_token_in_rank_handle, is_token_in_rank)
                     assert torch.equal(channel_prefix_matrix[:, -1], num_tokens_per_rank)
                     assert torch.all(recv_channel_prefix_matrix[:, 0] == 0)
+                    assert torch.all(send_head[is_token_in_rank_handle == -1] == -1)
                     assert gbl_num_tokens_per_rank[rank].item() == recv_x.size(0), f'{gbl_num_tokens_per_rank[rank].item()} != {recv_x.size(0)}'
                     assert gbl_num_tokens_per_expert.view(num_ranks, -1)[rank].tolist() == recv_num_tokens_per_expert_list
                     if current_x is not x_pure_rand:
@@ -391,8 +396,19 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     if test_ll_compatibility:
         ll_num_tokens, ll_hidden, ll_num_experts, ll_num_topk = 16, 5120, 256, 9
         num_rdma_bytes = deep_ep.Buffer.get_low_latency_rdma_size_hint(ll_num_tokens, ll_hidden, num_ranks, ll_num_experts)
-        
-    # TODO: why is 2^9 here ?
+    
+    # there's two assertion about this num_nvl_bytes:
+    # 1. num_ranks * (num_ranks + num_local_experts) * sizeof(int) <= num_nvl_bytes
+    # 2. num_ranks * num_ranks * sizeof(int) +                                                                    // Size prefix matrix
+    #    num_channels * num_ranks * sizeof(int) +                                                                 // Channel start offset
+    #    num_channels * num_ranks * sizeof(int) +                                                                 // Channel end offset
+    #    num_channels * num_ranks * sizeof(int) * 2 +                                                             // Queue head and tail
+    #    num_channels * num_ranks * config.num_max_nvl_chunked_recv_tokens * hidden * recv_x.element_size() +     // Data buffer
+    #    num_channels * num_ranks * config.num_max_nvl_chunked_recv_tokens * sizeof(int) +                        // Source index buffer
+    #    num_channels * num_ranks * config.num_max_nvl_chunked_recv_tokens * num_topk * sizeof(int64_t) +         // Top-k index buffer
+    #    num_channels * num_ranks * config.num_max_nvl_chunked_recv_tokens * num_topk * sizeof(float) +           // Top-k weight buffer
+    #    num_channels * num_ranks * config.num_max_nvl_chunked_recv_tokens * sizeof(float) * num_scales           // FP8 scale buffer
+    #    <= num_nvl_bytes
     num_nvl_bytes = int(2e9)
     num_qps_per_rank = (ll_num_experts // num_ranks if test_ll_compatibility else 1)
     
