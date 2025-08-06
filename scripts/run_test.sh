@@ -3,9 +3,10 @@
 LOG_ROOT=logs
 mkdir -p $LOG_ROOT
 
-export NVSHMEM_IB_ENABLE_IBGDA=1
-export NVSHMEM_IBGDA_NIC_HANDLER=gpu
-export NVSHMEM_DISABLE_P2P=0 # set to 0 to enable NVLink in low-latency mode
+# deepep test will set the env vars in the script
+# export NVSHMEM_IB_ENABLE_IBGDA=1
+# export NVSHMEM_IBGDA_NIC_HANDLER=gpu
+# export NVSHMEM_DISABLE_P2P=0 # set to 0 to enable NVLink in low-latency mode
 # export NVSHMEM_SYMMETRIC_SIZE=2**30 # default: 1GB
 
 

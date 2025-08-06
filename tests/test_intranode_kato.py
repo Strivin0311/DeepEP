@@ -131,7 +131,7 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
             for current_x in filter(lambda elem: elem is not None, (x,)): # (x_pure_rand, x, x_e4m3)):
                 for with_topk in (True,): # (False, True):
                     if local_rank == 0:
-                        print("\n# ------    Test Dispatch   ------ #\n", flush=True)
+                        print("\n# ------    Test Intranode Dispatch   ------ #\n", flush=True)
                     
                     # prepare dispatch args
                     if local_rank == 0:
@@ -226,7 +226,7 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
                             check_data(recv_topk_weights, rank_prefix_matrix)
 
                     if local_rank == 0:
-                        print("\n# ------    Test Dispatch with worst tokens   ------ #\n", flush=True)
+                        print("\n# ------    Test Intranode Dispatch with worst tokens   ------ #\n", flush=True)
 
                     # Test `num_worst_tokens != 0`
                     if with_topk:
@@ -265,7 +265,7 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
                         assert torch.all(recv_worst_topk_idx[recv_x.size(0):] == -1).item()
 
                     if local_rank == 0:
-                        print("\n# ------    Test Cached Dispatch   ------ #\n", flush=True)
+                        print("\n# ------    Test Intranode Cached Dispatch   ------ #\n", flush=True)
 
                     # Test cached dispatch (must without top-k staffs)
                     if not with_topk:
@@ -279,7 +279,7 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
                             check_data(recv_x, rank_prefix_matrix)
                     
                     if local_rank == 0:
-                        print("\n# ------    Test Combine   ------ #\n", flush=True)
+                        print("\n# ------    Test Intranode Combine   ------ #\n", flush=True)
                     
                     # prepare combine args
                     send_head_copy = send_head.clone()

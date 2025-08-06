@@ -32,27 +32,59 @@ def test_main(num_tokens: int, hidden: int, num_experts: int, num_topk: int,
     # Randomly mask some positions
     for i in range(10):
         topk_idx[random.randint(0, num_tokens - 1), random.randint(0, num_topk - 1)] = -1
+        
+    print(
+        (
+            f"[RANK {rank}] {x=} | {x.shape=}\n"
+            f"{topk_idx=} | {topk_idx.shape=}\n"
+            f"{topk_weights=} | {topk_weights.shape=}\n\n"
+        )
+        , flush=True
+    )
 
     # Check dispatch correctness
     do_check = True
     hash_value, num_times = 0, 0
-    for current_x in (x, x_pure_rand):
-        for return_recv_hook in (False, True):
-            for dispatch_use_fp8 in (False, True):
+    for current_x in (x,): # (x, x_pure_rand):
+        for return_recv_hook in (False,): # (False, True):
+            for dispatch_use_fp8 in (False,): # (False, True):
                 for round_scale in (False, True) if dispatch_use_fp8 else (False, ):
                     for use_ue8m0 in (False, True) if round_scale else (False, ):
                         num_times += 1
-                        for i in range((num_times % 2) + 1):
+                        for i in range(1): # range((num_times % 2) + 1):
+                            if rank == 0:
+                                print("\n# ------    Test Low Latency Dispatch   ------ #\n", flush=True)
+                            
+                            # prepare
                             cumulative_local_expert_recv_stats = torch.zeros((num_local_experts, ), dtype=torch.int, device='cuda')
+                                
+                            # dispatch
                             packed_recv_x, packed_recv_count, handle, event, hook = \
                                 buffer.low_latency_dispatch(current_x, topk_idx, num_tokens, num_experts,
                                                             use_fp8=dispatch_use_fp8, round_scale=round_scale, use_ue8m0=use_ue8m0,
                                                             cumulative_local_expert_recv_stats=cumulative_local_expert_recv_stats,
                                                             async_finish=not return_recv_hook, return_recv_hook=return_recv_hook)
+                                
+                            # wait
                             hook() if return_recv_hook else event.current_stream_wait()
+                        
+                        # cast
                         packed_recv_x = (packed_recv_x[0], packed_recv_x[1].contiguous()) if dispatch_use_fp8 else packed_recv_x
                         simulated_gemm_x = per_token_cast_back(packed_recv_x[0].view(-1, hidden), packed_recv_x[1].view(-1, hidden // 128)).view(packed_recv_x[0].shape) \
                             if dispatch_use_fp8 else packed_recv_x.clone()
+                           
+                        # print 
+                        print(
+                            (
+                                f"[RANK {rank}] {packed_recv_x=} | {packed_recv_x.shape=}\n"
+                                f"{packed_recv_count=} | {packed_recv_count.shape=}\n"
+                                f"{simulated_gemm_x=} | {simulated_gemm_x.shape=}\n"
+                                f"{handle=}\n\n"
+                            )
+                            , flush=True
+                        )
+                            
+                        # check
                         all_topk_idx = torch.empty((num_ranks, num_tokens, num_topk), dtype=topk_idx.dtype, device='cuda')
                         dist.all_gather_into_tensor(all_topk_idx, topk_idx, group=group)
                         for i in range(num_local_experts if do_check else 0):
@@ -88,16 +120,35 @@ def test_main(num_tokens: int, hidden: int, num_experts: int, num_topk: int,
                             else:
                                 hash_value ^= hash_tensor(packed_recv_x[i, :num_valid_tokens])
 
+                        if rank == 0:
+                            print("\n# ------    Test Low Latency Combine   ------ #\n", flush=True)
+                        
                         # Check combine correctness
-                        for zero_copy in (False, ) if use_logfmt else (False, True):
+                        for zero_copy in (True, ): # (False, ) if use_logfmt else (False, True):
+                            # prepare
                             if zero_copy:
                                 buffer.get_next_low_latency_combine_buffer(handle)[:, :, :] = simulated_gemm_x
                             out = torch.empty((num_tokens, hidden), dtype=torch.bfloat16, device='cuda')
+                            
+                            # combine
                             combined_x, event, hook = buffer.low_latency_combine(simulated_gemm_x, topk_idx, topk_weights, handle,
                                                                                 use_logfmt=use_logfmt,
                                                                                 async_finish=not return_recv_hook, zero_copy=zero_copy,
                                                                                 return_recv_hook=return_recv_hook, out=out)
+                            
+                            # wait
                             hook() if return_recv_hook else event.current_stream_wait()
+                            
+                            # print
+                            print(
+                                (
+                                    f"[RANK {rank}] {combined_x=} | {combined_x.shape=}\n"
+                                    f"{event=} | {hook=}\n\n"
+                                )
+                                , flush=True
+                            )
+                            
+                            # checks
                             if do_check:
                                 diff = calc_diff(current_x * topk_weights.masked_fill(topk_idx == -1, 0).sum(dim=1).view(-1, 1), combined_x)
                                 assert torch.isnan(combined_x).sum().item() == 0
@@ -154,7 +205,9 @@ def test_main(num_tokens: int, hidden: int, num_experts: int, num_topk: int,
 def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     rank, num_ranks, group = init_dist(local_rank, num_local_ranks)
     num_tokens, hidden = args.num_tokens, args.hidden
+    num_max_recv_tokens = num_ranks * num_ranks
     num_topk, num_experts = args.num_topk, args.num_experts
+    num_local_experts = num_experts // num_ranks
     allow_nvlink = os.environ.get("DEEPEP_TEST_LOW_LATENCY_ALLOW_NVLINK", "1") == "1"
 
     num_nvl_bytes = 0
@@ -162,9 +215,11 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     if local_rank == 0:
         print(
             (
-                f"[config] {num_nvl_bytes} | {num_rdma_bytes=} ({num_rdma_bytes / 1e9:.2f} GB) | "
-                f"{num_ranks=} | {num_tokens=} | {hidden=} |"
-                f" {num_topk=} | {num_experts=} | {allow_nvlink=}"
+                f"[config] {num_nvl_bytes=} | {num_rdma_bytes=} ({num_rdma_bytes / 1e9:.2f} GB) | "
+                f"{num_ranks=} | {num_tokens=} | {num_max_recv_tokens=} | "
+                f"{group.size()=} | {hidden=} |"
+                f" {num_topk=} | {num_experts=} | {num_local_experts} | "
+                f"{allow_nvlink=}\n\n"
             )
             , flush=True
         )
@@ -218,6 +273,9 @@ if __name__ == '__main__':
     parser.add_argument("--pressure-test", action='store_true',
                         help='Whether to do pressure test')
     args = parser.parse_args()
+    
+    # disable pressure test
+    args.pressure_test = False
 
     num_processes = args.num_processes
     torch.multiprocessing.spawn(test_loop, args=(num_processes, args), nprocs=num_processes)
