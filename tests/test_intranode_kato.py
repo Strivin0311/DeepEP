@@ -62,6 +62,7 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
     # e.g. if the original rank_idx is: [0, 2, 2, 3, 4, 5, 5, 3]
     # then the result will be: [5, 4, 3, 2, 0, -1, -1, -1]
     inplace_unique(rank_idx, num_ranks)
+    print(f"[RANK {rank}]: {rank_idx=}\n", flush=True)
 
     # Expert meta
     # num_tokens_per_expert[e]: the number of tokens sent to expert e by this rank
@@ -143,18 +144,21 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
                         dispatch_args.update({'previous_event': buffer.capture()})
                         
                     # dispatch
-                    # recv_x: shape=[recv_num_tokens, hidden_dim]: the recv tokens for this rank (in rank order just like a2a output, while the boundary is indicated by rank_prefix_matrix)
-                    # recv_topk_idx: shape=[recv_num_tokens, topk]: the local expert idx for this rank w.r.t. each recv token's topk list (-1 means not sent to this rank)
-                    # recv_topk_weights: shape=[recv_num_tokens, topk]: the corr. weight for each recv token's topk list (if idx = -1, then weight = 0.)
+                    # recv_x: shape=[num_recv_tokens, hidden_dim]: the recv tokens for this rank (in rank order just like a2a output, while the boundary is indicated by rank_prefix_matrix)
+                    # recv_topk_idx: shape=[num_recv_tokens, topk]: the local expert idx for this rank w.r.t. each recv token's topk list (-1 means not sent to this rank)
+                    # recv_topk_weights: shape=[num_recv_tokens, topk]: the corr. weight for each recv token's topk list (if idx = -1, then weight = 0.)
                     # recv_num_tokens_per_expert_list: shape=[num_local_experts,]: the number of tokens to recv for each local expert in this rank
                     # handle: the tuple of some meta tensors that will be passed to combine or cached dispatch
-                    # handle[0] (rank_prefix_matrix): shape=[num_ranks, num_ranks]: rank_prefix_matrix[:, r]: the prefix sum of number of tokens sent by each rank to rank r
-                    # handle[1] (channel_prefix_matrix): shape=[num_ranks, num_channels]: the prefix sum of send token end idxs sent by each send-channel
-                    # handle[2] (recv_channel_prefix_matrix): shape=[num_ranks, num_channels]: the prefix sum of recv token start idxs recv by each recv-channel
+                    # handle[0] (rank_prefix_matrix): shape=[num_ranks, num_ranks]: rank_prefix_matrix[:, r]: the prefix sum of number of tokens (i.e. end idxs) sent by each rank to rank r
+                    # handle[1] (channel_prefix_matrix): shape=[num_ranks, num_channels]: channel_prefix_matrix[r, :]: the prefix sum of send token end idxs sent by each send-channel to rank r
+                    # handle[2] (recv_channel_prefix_matrix): shape=[num_ranks, num_channels]: recv_channel_prefix_matrix[r, :]: the prefix sum of recv token start idxs recv by each recv-channel from rank r
                     # handle[3] (recv_src_idx): shape=[num_recv_tokens,]: the original token idx in the sender's buffer of each recv token
+                    # so this is used in combine stage to indicate the original token position that each recv token should be reduced to
                     # handle[4] (is_token_in_rank): shape=[num_tokens, num_ranks]
-                    # handle[5] (send_head): shape=[num_tokens, num_ranks]: the cached_channel_tail_idx of each send token for each rank, 
-                    # and if is_token_in_rank[i, r] == -1, then send_head[i, r] == -1 as well
+                    # handle[5] (send_head): shape=[num_tokens, num_ranks]: send_head[i, r]: the offset in the corr. channel of send token i if it needs to be sent to rank r
+                    # since the cached_channel_tail_idx starts at 0 when token_idx == token_start_idx for the corr. channel
+                    # thus the send_head[:, r] will be several cu_seqlens like: [0, 1, ... channel0_size, 0, 1, ... channel1_size, ...]
+                    # and if is_token_in_rank[i, r] == -1, then send_head[i, r] == -1 as well (and should be ignored in the cu_seqlens above)
                     recv_x, recv_topk_idx, recv_topk_weights, recv_num_tokens_per_expert_list, handle, event = buffer.dispatch(**dispatch_args)
                     
                     # wait
@@ -166,15 +170,15 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
                         print(
                             (
                                 f"\n[RANK {rank}]: {recv_x.shape=}\n"
-                                f"{recv_topk_idx.shape=} | {recv_topk_idx[0]=}\n"
-                                f"{recv_topk_weights.shape=} | {recv_topk_weights[0]=}\n"
+                                f"{recv_topk_idx.shape=} | {recv_topk_idx=}\n"
+                                f"{recv_topk_weights.shape=} | {recv_topk_weights=}\n"
                                 f"{len(recv_num_tokens_per_expert_list)=} | {recv_num_tokens_per_expert_list=}\n"
                                 f"{rank_prefix_matrix.shape=} | {rank_prefix_matrix=}\n" # handle[0]
                                 f"{channel_prefix_matrix.shape=} | {channel_prefix_matrix=}\n" # handle[1]
                                 f"{recv_channel_prefix_matrix.shape=} | {recv_channel_prefix_matrix=}\n" # handle[2]
                                 f"{recv_src_idx.shape=} | {recv_src_idx=}\n" # handle[3]
                                 f"{is_token_in_rank_handle.shape=} | {is_token_in_rank_handle=}\n" # handle[4]
-                                f"{send_head.shape=} | {send_head=}\n" # handle[5]
+                                f"After dipatch: {send_head.shape=} | {send_head=}\n\n" # handle[5]
                             )
                             , flush=True
                         )
@@ -190,7 +194,7 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
                                 f"{recv_channel_prefix_matrix.shape=} | {recv_channel_prefix_matrix=}\n" # handle[2]
                                 f"{recv_src_idx.shape=} | {recv_src_idx=}\n" # handle[3]
                                 f"{is_token_in_rank_handle.shape=} | {is_token_in_rank_handle=}\n" # handle[4]
-                                f"{send_head.shape=} | {send_head=}\n" # handle[5]
+                                f"After dipatch: {send_head.shape=} | {send_head=}\n\n" # handle[5]
                             )
                             , flush=True
                         )
@@ -201,6 +205,7 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
                     # check
                     assert torch.equal(is_token_in_rank_handle, is_token_in_rank)
                     assert torch.equal(channel_prefix_matrix[:, -1], num_tokens_per_rank)
+                    assert torch.equal(recv_channel_prefix_matrix[rank, 1:], channel_prefix_matrix[rank, :-1])
                     assert torch.all(recv_channel_prefix_matrix[:, 0] == 0)
                     assert torch.all(send_head[is_token_in_rank_handle == -1] == -1)
                     assert gbl_num_tokens_per_rank[rank].item() == recv_x.size(0), f'{gbl_num_tokens_per_rank[rank].item()} != {recv_x.size(0)}'
@@ -277,6 +282,7 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
                         print("\n# ------    Test Combine   ------ #\n", flush=True)
                     
                     # prepare combine args
+                    send_head_copy = send_head.clone()
                     combine_args = {'x': recv_x, 'handle': handle, 'config': config, 'async_finish': async_mode}
                     if with_topk:
                         combine_args.update({'topk_weights': recv_topk_weights})
@@ -284,8 +290,8 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
                         combine_args.update({'previous_event': buffer.capture()})
                     
                     # combine
-                    # combined_x: shape=[num_tokens, hidden_size]
-                    # combined_topk_weights: shape=[num_tokens, topk]
+                    # combined_x: shape=[num_tokens, hidden_size]: combined_x[i]: the ith token's sum-reduction result of top-k experts
+                    # combined_topk_weights: shape=[num_tokens, topk]: combined_topk_weights[i]: the ith token's sum-reduction weights
                     combined_x, combined_topk_weights, event = buffer.combine(**combine_args)
                     
                     # wait
@@ -296,7 +302,8 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
                         print(
                             (
                                 f"\n[RANK {rank}]: {combined_x.shape=}\n"
-                                f"{combined_topk_weights.shape=}\n\n"
+                                f"{combined_topk_weights.shape=} | {combined_topk_weights=}\n"
+                                f"Before combine: {send_head.shape=} | {send_head=}\n\n"
                             )
                             , flush=True
                         )
@@ -304,12 +311,14 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
                         print(
                             (
                                 f"\n[RANK {rank}]: {combined_x.shape=}\n"
-                                f"{combined_topk_weights=}\n\n"
+                                f"{combined_topk_weights=}\n"
+                                f"Before combine: {send_head.shape=} | {send_head=}\n\n"
                             )
                             , flush=True
                         )
                     
                     # check
+                    assert torch.equal(send_head[send_head_copy != -1], send_head_copy[send_head_copy != -1]) # cached_notify_combine will modify send_head in-place for any entry == -1
                     check_x = combined_x.float() / is_token_in_rank.sum(dim=1).unsqueeze(1)
                     ref_x = x_pure_rand if current_x is x_pure_rand else x
                     assert calc_diff(check_x, ref_x) < 5e-6
