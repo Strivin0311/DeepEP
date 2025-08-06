@@ -17,7 +17,7 @@ export NVSHMEM_DISABLE_P2P=0 # set to 0 to enable NVLink in low-latency mode
 export DEEPEP_TEST_INTRANODE_LOW_LATENCY=0
 
 # python tests/test_intranode.py > ${LOG_ROOT}/test_intranode.log 2>&1
-python tests/test_intranode_kato.py > ${LOG_ROOT}/test_intranode_kato.log 2>&1
+# python tests/test_intranode_kato.py > ${LOG_ROOT}/test_intranode_kato.log 2>&1
 
 # ----- test-internode ----- #
 
@@ -27,6 +27,10 @@ python tests/test_intranode_kato.py > ${LOG_ROOT}/test_intranode_kato.log 2>&1
 
 # ----- test-low-latency ----- #
 
-# FIXME: run this test will raise the error:
+# self-added env variable to control allow-nvlink mode for test_low_latency.py
+export DEEPEP_TEST_LOW_LATENCY_ALLOW_NVLINK=1
+
+# FIXME: run this test will raise the error when return_recv_hook=True => num_kernels_per_period=2
 #   assert len(durations) % num_kernels_per_period == 0
 # python tests/test_low_latency.py > ${LOG_ROOT}/test_low_latency.log 2>&1
+python tests/test_low_latency_kato.py > ${LOG_ROOT}/test_low_latency_kato.log 2>&1

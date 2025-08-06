@@ -405,6 +405,8 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     if test_ll_compatibility:
         ll_num_tokens, ll_hidden, ll_num_experts, ll_num_topk = 16, 5120, 256, 9
         num_rdma_bytes = deep_ep.Buffer.get_low_latency_rdma_size_hint(ll_num_tokens, ll_hidden, num_ranks, ll_num_experts)
+        if local_rank == 0:
+            print(f"Low latency mode: {ll_num_tokens=} | {ll_hidden=} | {ll_num_experts=} | {ll_num_topk=}", flush=True)
     
     # there's two assertion about this num_nvl_bytes:
     # 1. num_ranks * (num_ranks + num_local_experts) * sizeof(int) <= num_nvl_bytes
@@ -421,11 +423,19 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     num_nvl_bytes = int(2e9)
     num_qps_per_rank = (ll_num_experts // num_ranks if test_ll_compatibility else 1)
     
-    print(f"[RANK {rank}]: {rank=} | {num_ranks=} | {local_rank=} | {num_local_ranks=} | {group.size()=}\n", flush=True)
-    print(f"[RANK {rank}]: {num_nvl_bytes=} | {num_rdma_bytes=} | {num_qps_per_rank=}\n", flush=True)
+    if local_rank == 0:
+        print(
+            (
+                f"[config]: {num_ranks=} | {num_local_ranks=} | {group.size()=} | "
+                f"{num_nvl_bytes=} ({num_nvl_bytes / 1e9:.2f} GB) | {num_rdma_bytes=} | {num_qps_per_rank=}\n"
+            )
+            , flush=True
+        )
 
     buffer = deep_ep.Buffer(
-        group, num_nvl_bytes, num_rdma_bytes, 
+        group, 
+        num_nvl_bytes=num_nvl_bytes, 
+        num_rdma_bytes=num_rdma_bytes, 
         low_latency_mode=test_ll_compatibility,
         num_qps_per_rank=num_qps_per_rank, 
         explicitly_destroy=True

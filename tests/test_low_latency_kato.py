@@ -1,3 +1,4 @@
+import os
 import argparse
 import random
 import torch
@@ -154,13 +155,29 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     rank, num_ranks, group = init_dist(local_rank, num_local_ranks)
     num_tokens, hidden = args.num_tokens, args.hidden
     num_topk, num_experts = args.num_topk, args.num_experts
+    allow_nvlink = os.environ.get("DEEPEP_TEST_LOW_LATENCY_ALLOW_NVLINK", "1") == "1"
 
+    num_nvl_bytes = 0
     num_rdma_bytes = deep_ep.Buffer.get_low_latency_rdma_size_hint(num_tokens, hidden, num_ranks, num_experts)
     if local_rank == 0:
-        print(f'Allocating buffer size: {num_rdma_bytes / 1e6} MB ...', flush=True)
-    buffer = deep_ep.Buffer(group, num_rdma_bytes=num_rdma_bytes, low_latency_mode=True,
-                            num_qps_per_rank=num_experts // num_ranks,
-                            allow_nvlink_for_low_latency_mode=not args.disable_nvlink, explicitly_destroy=True)
+        print(
+            (
+                f"[config] {num_nvl_bytes} | {num_rdma_bytes=} ({num_rdma_bytes / 1e9:.2f} GB) | "
+                f"{num_ranks=} | {num_tokens=} | {hidden=} |"
+                f" {num_topk=} | {num_experts=} | {allow_nvlink=}"
+            )
+            , flush=True
+        )
+    
+    buffer = deep_ep.Buffer(
+        group,
+        num_nvl_bytes=num_nvl_bytes, 
+        num_rdma_bytes=num_rdma_bytes, 
+        low_latency_mode=True,
+        num_qps_per_rank=num_experts // num_ranks,
+        allow_nvlink_for_low_latency_mode=allow_nvlink, 
+        explicitly_destroy=True
+    )
     test_main(num_tokens, hidden, num_experts, num_topk, rank, num_ranks, group, buffer,
               use_logfmt=args.use_logfmt, seed=1)
 
