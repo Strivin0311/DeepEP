@@ -291,7 +291,9 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
                     
                     # combine
                     # combined_x: shape=[num_tokens, hidden_size]: combined_x[i]: the ith token's sum-reduction result of top-k experts
+                    # NOTE: the combined_x is assumed to be already scaled by topk_weights before combining, thus in kernel we don't have to multiply topk_weights
                     # combined_topk_weights: shape=[num_tokens, topk]: combined_topk_weights[i]: the ith token's sum-reduction weights
+                    # NOTE: the topk_weights might not a valid probability distribution, thus here we might need combined_topk_weights to be normalized
                     combined_x, combined_topk_weights, event = buffer.combine(**combine_args)
                     
                     # wait

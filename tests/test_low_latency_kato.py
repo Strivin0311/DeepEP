@@ -46,7 +46,7 @@ def test_main(num_tokens: int, hidden: int, num_experts: int, num_topk: int,
     do_check = True
     hash_value, num_times = 0, 0
     for current_x in (x,): # (x, x_pure_rand):
-        for return_recv_hook in (False,): # (False, True):
+        for return_recv_hook in (True,): # (False, True):
             for dispatch_use_fp8 in (False,): # (False, True):
                 for round_scale in (False, True) if dispatch_use_fp8 else (False, ):
                     for use_ue8m0 in (False, True) if round_scale else (False, ):
@@ -59,32 +59,52 @@ def test_main(num_tokens: int, hidden: int, num_experts: int, num_topk: int,
                             cumulative_local_expert_recv_stats = torch.zeros((num_local_experts, ), dtype=torch.int, device='cuda')
                                 
                             # dispatch
+                            # packed_recv_x: shape=[num_local_experts, num_max_recv_tokens, hidden]: the recv tokens of all local experts
+                            # with a buffer size of num_max_recv_tokens to avoid cpu-gpu sync
+                            # thus not all tokens in packed_recv_x are valid (the number of valid tokens is indicated in packed_recv_count)
+                            # packed_recv_count: shape=[num_local_experts,]: how many tokens are received for each local expert
+                            # thus packed_recv_count[e, :packed_recv_count[e], :] are valid for local expert e
+                            # handle[0] (packed_recv_src_info): shape=[num_local_experts, num_max_recv_tokens]: the token idx in the sender's buffer for each recv token for local expert e
+                            # and only the valid tokens in packed_recv_src_info[e, :packed_recv_count[e]] are valid (non-valid entries are empty numbers)
+                            # handle[1] (packed_recv_layout_range): shape=[num_local_experts, num_ranks]: the recv range from each global expert (expert id = rank id * local expert id)
+                            # where a single recv range is a int64 number, which is actually packed from an int-tuple of (num_recv_tokens, recv_token_begin_idx)
+                            # where the recv_token_begin_idx is the token idx in the recv buffer, ranging in [0, num_max_recv_tokens)
+                            # handle[2] (num_max_dispatch_tokens_per_rank)
+                            # handle[3] (hidden_size)
+                            # handle[4] (num_experts)
+                            # cumulative_local_expert_recv_stats: shape=[num_local_experts,]: the same as packed_recv_count, TODO: so why need this ?
                             packed_recv_x, packed_recv_count, handle, event, hook = \
                                 buffer.low_latency_dispatch(current_x, topk_idx, num_tokens, num_experts,
                                                             use_fp8=dispatch_use_fp8, round_scale=round_scale, use_ue8m0=use_ue8m0,
                                                             cumulative_local_expert_recv_stats=cumulative_local_expert_recv_stats,
                                                             async_finish=not return_recv_hook, return_recv_hook=return_recv_hook)
                                 
-                            # wait
+                            # wait (if return_recv_hook, then the hook will be called to apply the receive stage to wait for all data to be received)
                             hook() if return_recv_hook else event.current_stream_wait()
                         
                         # cast
                         packed_recv_x = (packed_recv_x[0], packed_recv_x[1].contiguous()) if dispatch_use_fp8 else packed_recv_x
                         simulated_gemm_x = per_token_cast_back(packed_recv_x[0].view(-1, hidden), packed_recv_x[1].view(-1, hidden // 128)).view(packed_recv_x[0].shape) \
                             if dispatch_use_fp8 else packed_recv_x.clone()
+                            
+                        # unpack
+                        packed_recv_src_info, packed_recv_layout_range, num_max_dispatch_tokens_per_rank, hidden_size, num_experts = handle
                            
                         # print 
                         print(
                             (
                                 f"[RANK {rank}] {packed_recv_x=} | {packed_recv_x.shape=}\n"
                                 f"{packed_recv_count=} | {packed_recv_count.shape=}\n"
-                                f"{simulated_gemm_x=} | {simulated_gemm_x.shape=}\n"
-                                f"{handle=}\n\n"
+                                f"{packed_recv_src_info=} | {packed_recv_src_info.shape=}\n"
+                                f"{packed_recv_layout_range=} | {packed_recv_layout_range.shape=}\n"
+                                f"{num_max_dispatch_tokens_per_rank=} | {hidden_size=} | {num_experts=}\n"
+                                f"{cumulative_local_expert_recv_stats=}\n\n"
                             )
                             , flush=True
                         )
-                            
+                        
                         # check
+                        assert torch.equal(cumulative_local_expert_recv_stats, packed_recv_count)
                         all_topk_idx = torch.empty((num_ranks, num_tokens, num_topk), dtype=topk_idx.dtype, device='cuda')
                         dist.all_gather_into_tensor(all_topk_idx, topk_idx, group=group)
                         for i in range(num_local_experts if do_check else 0):
@@ -127,16 +147,19 @@ def test_main(num_tokens: int, hidden: int, num_experts: int, num_topk: int,
                         for zero_copy in (True, ): # (False, ) if use_logfmt else (False, True):
                             # prepare
                             if zero_copy:
+                                # if zero_copy, then we need to copy the data into the RDMA buffer outside the kernel
                                 buffer.get_next_low_latency_combine_buffer(handle)[:, :, :] = simulated_gemm_x
+                            # prepare the combined_x buffer outside the kernel
                             out = torch.empty((num_tokens, hidden), dtype=torch.bfloat16, device='cuda')
                             
                             # combine
+                            # combined_x: shape=[num_tokens, hidden]
                             combined_x, event, hook = buffer.low_latency_combine(simulated_gemm_x, topk_idx, topk_weights, handle,
                                                                                 use_logfmt=use_logfmt,
                                                                                 async_finish=not return_recv_hook, zero_copy=zero_copy,
                                                                                 return_recv_hook=return_recv_hook, out=out)
                             
-                            # wait
+                            # wait (if return_recv_hook, then the hook will be called to apply the receive stage to wait for all data to be received and reduced)
                             hook() if return_recv_hook else event.current_stream_wait()
                             
                             # print
@@ -150,6 +173,8 @@ def test_main(num_tokens: int, hidden: int, num_experts: int, num_topk: int,
                             
                             # checks
                             if do_check:
+                                assert torch.equal(out, combined_x), f'{out=}\n{combined_x=}'
+                                assert torch.equal(simulated_gemm_x, packed_recv_x)
                                 diff = calc_diff(current_x * topk_weights.masked_fill(topk_idx == -1, 0).sum(dim=1).view(-1, 1), combined_x)
                                 assert torch.isnan(combined_x).sum().item() == 0
                                 assert diff < (7e-4 if dispatch_use_fp8 else 1e-5), f'Error: {diff=}, {zero_copy=}'
@@ -207,8 +232,16 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     num_tokens, hidden = args.num_tokens, args.hidden
     num_max_recv_tokens = num_ranks * num_ranks
     num_topk, num_experts = args.num_topk, args.num_experts
+    assert num_topk <= 9 # kNumMaxTopK = 9
     num_local_experts = num_experts // num_ranks
     allow_nvlink = os.environ.get("DEEPEP_TEST_LOW_LATENCY_ALLOW_NVLINK", "1") == "1"
+    
+    num_device_sms = 132 # for Hopper
+    num_warp_groups = (num_experts + num_device_sms - 1) // num_device_sms
+    num_warps_per_group = 32 // num_warp_groups
+    num_warps = num_warp_groups * num_warps_per_group
+    assert num_warps <= 32 # kNumMaxWarpGroups = 32
+    num_sms = (num_experts + num_warp_groups - 1) // num_warp_groups
 
     num_nvl_bytes = 0
     num_rdma_bytes = deep_ep.Buffer.get_low_latency_rdma_size_hint(num_tokens, hidden, num_ranks, num_experts)
@@ -216,10 +249,17 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
         print(
             (
                 f"[config] {num_nvl_bytes=} | {num_rdma_bytes=} ({num_rdma_bytes / 1e9:.2f} GB) | "
-                f"{num_ranks=} | {num_tokens=} | {num_max_recv_tokens=} | "
+                f"{num_ranks=} | {num_tokens=} (num_max_dispatch_tokens_per_rank) | {num_max_recv_tokens=} | "
                 f"{group.size()=} | {hidden=} |"
                 f" {num_topk=} | {num_experts=} | {num_local_experts} | "
                 f"{allow_nvlink=}\n\n"
+            )
+            , flush=True
+        )
+        
+        print(
+            (
+                f"[kernel config] {num_device_sms=} | {num_warp_groups=} | {num_warps_per_group=} | {num_warps=} | {num_sms=}\n\n"
             )
             , flush=True
         )
