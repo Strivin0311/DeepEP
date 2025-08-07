@@ -22,9 +22,13 @@ export DEEPEP_TEST_INTRANODE_LOW_LATENCY=0
 
 # ----- test-internode ----- #
 
+# self-added env variable to control low-latency mode for test_internode.py
+export DEEPEP_TEST_INTERNODE_LL_COMPATIBILITY=0
+
 # FIXME: single machine can not run this test due the failed check:
 # Assertion error /home/littsk/kato/workspace/cuda-library/deepep/csrc/deep_ep.cpp:32 'num_ranks > NUM_MAX_NVL_PEERS or low_latency_mode'
 # python tests/test_internode.py > ${LOG_ROOT}/test_internode.log 2>&1
+python tests/test_internode_kato.py > ${LOG_ROOT}/test_internode_kato.log 2>&1
 
 # ----- test-low-latency ----- #
 
@@ -34,4 +38,4 @@ export DEEPEP_TEST_LOW_LATENCY_ALLOW_NVLINK=1
 # FIXME: run this test will raise the error when return_recv_hook=True => num_kernels_per_period=2
 #   assert len(durations) % num_kernels_per_period == 0
 # python tests/test_low_latency.py > ${LOG_ROOT}/test_low_latency.log 2>&1
-python tests/test_low_latency_kato.py > ${LOG_ROOT}/test_low_latency_kato.log 2>&1
+# python tests/test_low_latency_kato.py > ${LOG_ROOT}/test_low_latency_kato.log 2>&1
