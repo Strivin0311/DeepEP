@@ -167,7 +167,14 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
                     event.current_stream_wait() if async_mode else ()
                     
                     # print
-                    rank_prefix_matrix, channel_prefix_matrix, recv_channel_prefix_matrix, recv_src_idx, is_token_in_rank_handle, send_head = handle
+                    (
+                        rank_prefix_matrix, # handle[0]
+                        channel_prefix_matrix, # handle[1]
+                        recv_channel_prefix_matrix, # handle[2]
+                        recv_src_idx, # handle[3]
+                        is_token_in_rank_handle, # handle[4]
+                        send_head, # handle[5]
+                    ) = handle
                     if with_topk:
                         print(
                             (
