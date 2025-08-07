@@ -234,6 +234,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     num_topk, num_experts = args.num_topk, args.num_experts
     assert num_topk <= 9 # kNumMaxTopK = 9
     num_local_experts = num_experts // num_ranks
+    num_qps_per_rank = num_local_experts
     allow_nvlink = os.environ.get("DEEPEP_TEST_LOW_LATENCY_ALLOW_NVLINK", "1") == "1"
     
     num_device_sms = 132 # for Hopper
@@ -252,7 +253,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                 f"{num_ranks=} | {num_tokens=} (num_max_dispatch_tokens_per_rank) | {num_max_recv_tokens=} | "
                 f"{group.size()=} | {hidden=} |"
                 f" {num_topk=} | {num_experts=} | {num_local_experts} | "
-                f"{allow_nvlink=}\n\n"
+                f"{num_qps_per_rank=} | {allow_nvlink=}\n\n"
             )
             , flush=True
         )
@@ -269,7 +270,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
         num_nvl_bytes=num_nvl_bytes, 
         num_rdma_bytes=num_rdma_bytes, 
         low_latency_mode=True,
-        num_qps_per_rank=num_experts // num_ranks,
+        num_qps_per_rank=num_qps_per_rank,
         allow_nvlink_for_low_latency_mode=allow_nvlink, 
         explicitly_destroy=True
     )
