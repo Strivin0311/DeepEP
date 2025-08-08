@@ -73,8 +73,8 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
     gbl_num_tokens_per_expert = num_tokens_per_expert.clone()
     dist.all_reduce(gbl_num_tokens_per_expert, group=group)
     if local_rank == 0:
-        print(f"{gbl_num_tokens_per_expert=}\n", flush=True)
-    print(f"[RANK {rank}]: {num_tokens_per_expert=}\n", flush=True)
+        print(f"{gbl_num_tokens_per_expert=} | {gbl_num_tokens_per_expert.shape=}\n", flush=True)
+    print(f"[RANK {rank}]: {num_tokens_per_expert=} | {num_tokens_per_expert.shape=}\n", flush=True)
 
     # Rank layout meta
     # num_tokens_per_rank[r]: the number of tokens sent to rank r by this rank
@@ -98,8 +98,8 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
     gbl_num_tokens_per_rank = num_tokens_per_rank.clone()
     dist.all_reduce(gbl_num_tokens_per_rank, group=group)
     if local_rank == 0:
-        print(f"{gbl_num_tokens_per_rank=}\n", flush=True)
-    print(f"[RANK {rank}]: {num_tokens_per_rank=}\n", flush=True)
+        print(f"{gbl_num_tokens_per_rank=} | {gbl_num_tokens_per_rank.shape=}\n", flush=True)
+    print(f"[RANK {rank}]: {num_tokens_per_rank=} | {num_tokens_per_rank.shape=}\n", flush=True)
 
     # get dispatch layout from buffer
     ref_num_tokens_per_rank, ref_num_tokens_per_rdma_rank, ref_num_tokens_per_expert, ref_is_token_in_rank, event_overlap = \

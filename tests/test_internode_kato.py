@@ -106,10 +106,7 @@ def test_main(args: argparse.Namespace, num_sms: int,
     group_scores = scores.view(num_tokens, num_nodes, -1).amax(dim=-1)
     group_idx = torch.topk(group_scores, k=num_topk_groups, dim=-1, sorted=False).indices
     masked_scores = create_grouped_scores(scores, group_idx, num_nodes)
-    
-    print(f"[RANK {rank}]: {group_scores=} | {group_scores.shape=}\n", flush=True)
-    print(f"[RANK {rank}]: {group_idx=} | {group_idx.shape=}\n", flush=True)
-    print(f"[RANK {rank}]: {masked_scores=} | {masked_scores.shape=}\n", flush=True)
+    assert torch.equal(scores, masked_scores) # since we guarantee num_nodes == num_topk_groups, thus scores == masked_scores
     
     topk_idx = torch.topk(masked_scores, num_topk, dim=-1, largest=True, sorted=False)[1]
     topk_weights = torch.ones((num_tokens, num_topk), dtype=torch.float32, device='cuda') * rank
@@ -122,13 +119,13 @@ def test_main(args: argparse.Namespace, num_sms: int,
     rdma_rank_idx = rank_idx // num_local_ranks
     rdma_rank_idx.masked_fill_(rank_idx == -1, -1)
     inplace_unique(rdma_rank_idx, num_nodes)
-    print(f"[RANK {rank}]: {rdma_rank_idx=} | {rdma_rank_idx.shape=}\n", flush=True)
 
     # RDMA dispatch counts
     rdma_idx = topk_idx // (num_experts // num_nodes)
     rdma_idx.masked_fill_(topk_idx == -1, -1)
     inplace_unique(rdma_idx, num_nodes)
     num_rdma_token_sent = rdma_idx.ne(-1).sum().item()
+    assert torch.equal(rdma_idx, rdma_rank_idx)
     print(f"[RANK {rank}]: {rdma_idx=} | {rdma_idx.shape=} | {num_rdma_token_sent=}\n", flush=True)
 
     # Expert meta
@@ -138,8 +135,8 @@ def test_main(args: argparse.Namespace, num_sms: int,
     gbl_num_tokens_per_expert = num_tokens_per_expert.clone()
     dist.all_reduce(gbl_num_tokens_per_expert, group=group)
     if local_rank == 0:
-        print(f"{gbl_num_tokens_per_expert=}\n", flush=True)
-    print(f"[RANK {rank}]: {num_tokens_per_expert=}\n", flush=True)
+        print(f"{gbl_num_tokens_per_expert=} | {gbl_num_tokens_per_expert.shape=}\n", flush=True)
+    print(f"[RANK {rank}]: {num_tokens_per_expert=} | {num_tokens_per_expert.shape=}\n", flush=True)
 
     # Rank layout meta
     num_tokens_per_rank = torch.empty((num_ranks, ), dtype=torch.int, device='cuda')
@@ -159,8 +156,9 @@ def test_main(args: argparse.Namespace, num_sms: int,
     gbl_num_tokens_per_rank = num_tokens_per_rank.clone()
     dist.all_reduce(gbl_num_tokens_per_rank, group=group)
     if local_rank == 0:
-        print(f"{gbl_num_tokens_per_rank=}\n", flush=True)
-    print(f"[RANK {rank}]: {num_tokens_per_rank=} | {num_tokens_per_rdma_rank=}\n", flush=True)
+        print(f"{gbl_num_tokens_per_rank=} | {gbl_num_tokens_per_rank.shape=}\n", flush=True)
+    print(f"[RANK {rank}]: {num_tokens_per_rank=} | {num_tokens_per_rank.shape=}\n", flush=True)
+    print(f"[RANK {rank}]: {num_tokens_per_rdma_rank=} | {num_tokens_per_rdma_rank.shape=}\n", flush=True)
 
     # get dispatch layout from buffer
     ref_num_tokens_per_rank, ref_num_tokens_per_rdma_rank, ref_num_tokens_per_expert, ref_is_token_in_rank, _ = \
@@ -213,6 +211,16 @@ def test_main(args: argparse.Namespace, num_sms: int,
                     # recv_topk_weights: shape=[num_recv_tokens, topk]: the corr. weight for each recv token's topk list (if idx = -1, then weight = 0.)
                     # recv_num_tokens_per_expert_list: shape=[num_local_experts,]: the number of tokens to recv for each local expert in this rank
                     # handle: the tuple of some meta tensors that will be passed to combine or cached dispatch
+                    # handle[0] (is_token_in_rank_handle)
+                    # handle[1] (rdma_channel_prefix_matrix): shape=[num_rdma_ranks, num_channels]: TODO: what's this ?
+                    # handle[2] (gbl_channel_prefix_matrix): shape=[num_ranks, num_channels]: TODO: what's this ?
+                    # handle[3] (recv_rdma_channel_prefix_matrix): shape=[num_rdma_ranks, num_channels]: TODO: what's this ?
+                    # handle[4] (recv_rdma_rank_prefix_sum): shape=[num_rdma_ranks,]: TODO: what's this ?
+                    # handle[5] (recv_gbl_channel_prefix_matrix): shape=[num_ranks, num_channels]: TODO: what's this ?
+                    # handle[6] (recv_gbl_rank_prefix_sum): shape=[num_ranks,]: TODO: what's this ?
+                    # handle[7] (recv_src_meta): shape=[num_recv_tokens, sizeof(internode::SourceMeta)=8]: TODO: what's this ?
+                    # handle[8] (send_rdma_head): shape=[num_tokens, num_rdma_ranks]: TODO: what's this ?
+                    # handle[9] (send_nvl_head): shape=[num_rdma_recv_tokens, num_local_ranks]: TODO: what's this ?
                     recv_x, recv_topk_idx, recv_topk_weights, recv_num_tokens_per_expert_list, handle, event = buffer.dispatch(**dispatch_args)
                     
                     # wait
@@ -356,6 +364,10 @@ def test_main(args: argparse.Namespace, num_sms: int,
                         print(' passed', flush=True)
     if local_rank == 0:
         print('', flush=True)
+
+    # sync before tuning
+    torch.cuda.synchronize()
+    dist.barrier()
 
     # Tune dispatch performance
     best_dispatch_results = None
