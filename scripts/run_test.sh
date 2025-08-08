@@ -18,24 +18,48 @@ mkdir -p $LOG_ROOT
 export DEEPEP_TEST_INTRANODE_LOW_LATENCY=0
 
 # python tests/test_intranode.py > ${LOG_ROOT}/test_intranode.log 2>&1
-# python tests/test_intranode_kato.py > ${LOG_ROOT}/test_intranode_kato.log 2>&1
-
-# ----- test-internode ----- #
-
-# self-added env variable to control low-latency mode for test_internode.py
-export DEEPEP_TEST_INTERNODE_LL_COMPATIBILITY=0
-
-# FIXME: single machine can not run this test due the failed check:
-# Assertion error /home/littsk/kato/workspace/cuda-library/deepep/csrc/deep_ep.cpp:32 'num_ranks > NUM_MAX_NVL_PEERS or low_latency_mode'
-# python tests/test_internode.py > ${LOG_ROOT}/test_internode.log 2>&1
-python tests/test_internode_kato.py > ${LOG_ROOT}/test_internode_kato.log 2>&1
+# python tests/test_intranode_kato.py > ${LOG_ROOT}/test_intranode_kato.log 2>&1; exit 0
 
 # ----- test-low-latency ----- #
 
 # self-added env variable to control allow-nvlink mode for test_low_latency.py
 export DEEPEP_TEST_LOW_LATENCY_ALLOW_NVLINK=1
 
-# FIXME: run this test will raise the error when return_recv_hook=True => num_kernels_per_period=2
-#   assert len(durations) % num_kernels_per_period == 0
 # python tests/test_low_latency.py > ${LOG_ROOT}/test_low_latency.log 2>&1
-# python tests/test_low_latency_kato.py > ${LOG_ROOT}/test_low_latency_kato.log 2>&1
+# python tests/test_low_latency_kato.py > ${LOG_ROOT}/test_low_latency_kato.log 2>&1; exit 0
+
+
+# ----- test-internode ----- #
+
+if [ -z "$1" ]; then
+    echo "Error: Please specify the rank of this node."
+    echo "Usage: ./run_distributed.sh <rank>"
+    echo "Example: ./run_distributed.sh 0  (for master node 0)"
+    exit 1
+else
+    echo "Launch with node rank: $1"
+fi
+
+# init dist env vars
+export OMP_NUM_THREADS=1
+export MASTER_ADDR=10.119.210.140 # replace with your own master node IP
+export MASTER_PORT=23457
+export NNODES=2
+export NPROC_PER_NODE=8
+export RANK=$1
+
+# self-added env variable to control low-latency mode for test_internode.py
+export DEEPEP_TEST_INTERNODE_LL_COMPATIBILITY=0
+
+# python tests/test_internode.py > ${LOG_ROOT}/test_internode.log 2>&1
+
+CMD="torchrun \
+--nproc_per_node=$NPROC_PER_NODE \
+--nnodes=$NNODES \
+--node_rank=$RANK \
+--master_addr=$MASTER_ADDR \
+--master_port=$MASTER_PORT \
+tests/test_internode_kato.py
+"
+
+$CMD > ${LOG_ROOT}/test_internode_kato_n${RANK}.log 2>&1

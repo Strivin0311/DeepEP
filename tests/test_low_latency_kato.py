@@ -228,7 +228,9 @@ def test_main(num_tokens: int, hidden: int, num_experts: int, num_topk: int,
 
 # noinspection PyUnboundLocalVariable,PyShadowingNames
 def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
+    # init dist
     rank, num_ranks, group = init_dist(local_rank, num_local_ranks)
+    
     num_tokens, hidden = args.num_tokens, args.hidden
     num_max_recv_tokens = num_ranks * num_ranks
     num_topk, num_experts = args.num_topk, args.num_experts

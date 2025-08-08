@@ -1,15 +1,64 @@
 import argparse
 import os
 import time
+from typing import Callable
+
 import torch
 import torch.distributed as dist
 
 # noinspection PyUnresolvedReferences
 import deep_ep
-from utils import init_dist, bench, bench_kineto, calc_diff, create_grouped_scores, inplace_unique, per_token_cast_to_fp8, per_token_cast_back
+from utils import bench, bench_kineto, calc_diff, create_grouped_scores, inplace_unique, per_token_cast_to_fp8, per_token_cast_back
 
 # Test compatibility with low latency functions
 import test_low_latency
+
+
+def setup_dist_env(
+    backend: str = "nccl",
+    base_seed: int | None = None,
+    seed_bias: Callable = lambda rank: 0,
+) -> tuple[int, int, int, dist.ProcessGroup, int, int | None]:
+    """set up distributed environment with the specified process group backend,
+    NOTE: the test script using this func to set up should be executed through torchrun
+
+    Args:
+        backend (str, optional): the process group backend. Defaults to "nccl".
+        base_seed (int | None, optional): the base seed. Defaults to None to not set seed.
+        seed_bias (Callable, optional): the seed bias func for each rank. Defaults to lambda rank: 0, i.e., no bias.
+
+    Returns:
+        rank, local_rank, world_size, world_group, device, seed
+    """
+    num_nodes = int(os.getenv('NNODES'))
+    num_local_ranks = int(os.getenv('NPROC_PER_NODE'))
+    rank = int(os.environ["RANK"])
+    local_rank = int(os.environ["LOCAL_RANK"])
+    world_size = int(os.environ["WORLD_SIZE"])
+    torch.cuda.set_device(local_rank)
+    device = torch.cuda.current_device()
+
+    dist.init_process_group(
+        backend=backend,
+        rank=rank,
+        world_size=world_size,
+    )
+
+    seed = None
+    if base_seed is not None:
+        seed = base_seed + seed_bias(rank)
+        torch.manual_seed(seed)
+
+    return (
+        num_nodes,
+        num_local_ranks,
+        world_size, # num_ranks
+        rank,
+        local_rank,
+        dist.group.WORLD,
+        device,
+        seed,
+    )  # noqa: E231
 
 
 # noinspection PyShadowingNames
@@ -57,6 +106,8 @@ def test_main(args: argparse.Namespace, num_sms: int,
     group_scores = scores.view(num_tokens, num_nodes, -1).amax(dim=-1)
     group_idx = torch.topk(group_scores, k=num_topk_groups, dim=-1, sorted=False).indices
     masked_scores = create_grouped_scores(scores, group_idx, num_nodes)
+    
+    print(f"[RANK {rank}]: {group_scores=} | {group_scores.shape=}\n", flush=True)
     print(f"[RANK {rank}]: {group_idx=} | {group_idx.shape=}\n", flush=True)
     print(f"[RANK {rank}]: {masked_scores=} | {masked_scores.shape=}\n", flush=True)
     
@@ -357,17 +408,19 @@ def test_main(args: argparse.Namespace, num_sms: int,
 
 
 # noinspection PyUnboundLocalVariable,PyShadowingNames
-def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
-    num_nodes = int(os.getenv('WORLD_SIZE', 1))
+def test_loop(args: argparse.Namespace):
     num_tokens, hidden = args.num_tokens, args.hidden
     num_topk, num_experts = args.num_topk, args.num_experts
-    num_topk_groups = args.num_topk_groups
-    rank, num_ranks, group = init_dist(local_rank, num_local_ranks)
+    
+    # init dist
+    num_nodes, num_local_ranks, num_ranks, rank, local_rank, group, device, seed = setup_dist_env(seed_bias=lambda rank: rank)
+    
     if args.test_ll_compatibility:
         ll_num_tokens, ll_hidden, ll_num_experts, ll_num_topk = 16, 5120, 256, 9
 
     num_sms = 24
     num_qps_per_rank = max(num_sms, ll_num_experts // num_ranks if args.test_ll_compatibility else 0)
+    args.num_topk_groups = num_topk_groups = num_nodes
     
     num_nvl_bytes = int(2e9)
     num_rdma_bytes = int(1e9)
@@ -376,7 +429,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
         print(
             (
                 f"[config] {num_nvl_bytes=} ({num_nvl_bytes / 1e9:.2f} GB) | {num_rdma_bytes=} ({num_rdma_bytes / 1e9:.2f} GB) | "
-                f"{num_nodes=} | {num_ranks=} | {group.size()=} | "
+                f"{num_nodes=} | {num_ranks=} | {num_local_ranks=} | {group.size()=} | "
                 f" {num_sms=} | {num_qps_per_rank=} | "
                 f"{num_tokens=} | {hidden=} | {num_topk=} | {num_experts=} | {num_topk_groups=}\n\n\n"
             )
@@ -427,13 +480,12 @@ if __name__ == '__main__':
     parser.add_argument('--test-ll-compatibility', action='store_true',
                         help='whether to test compatibility with low-latency kernels')
     args = parser.parse_args()
-
-    # Set default `num_topk_groups` if not provided
-    if args.num_topk_groups is None:
-        num_nodes = int(os.getenv('WORLD_SIZE', 1))
-        args.num_topk_groups = min(num_nodes, 4)
         
-    args.test_ll_compatibility = os.environ.get('DEEPEP_TEST_INTERNODE_LL_COMPATIBILITY', args.test_ll_compatibility)
+    args.test_ll_compatibility = os.environ.get('DEEPEP_TEST_INTERNODE_LL_COMPATIBILITY', args.test_ll_compatibility) == "1"
 
     num_processes = args.num_processes
-    torch.multiprocessing.spawn(test_loop, args=(num_processes, args), nprocs=num_processes)
+    
+    # torch.multiprocessing.spawn(test_loop, args=(num_processes, args), nprocs=num_processes)
+    
+    # launch using torchrun
+    test_loop(args)
