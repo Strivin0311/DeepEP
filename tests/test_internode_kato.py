@@ -211,16 +211,27 @@ def test_main(args: argparse.Namespace, num_sms: int,
                     # recv_topk_weights: shape=[num_recv_tokens, topk]: the corr. weight for each recv token's topk list (if idx = -1, then weight = 0.)
                     # recv_num_tokens_per_expert_list: shape=[num_local_experts,]: the number of tokens to recv for each local expert in this rank
                     # handle: the tuple of some meta tensors that will be passed to combine or cached dispatch
-                    # handle[0] (is_token_in_rank_handle)
-                    # handle[1] (rdma_channel_prefix_matrix): shape=[num_rdma_ranks, num_channels]: TODO: what's this ?
-                    # handle[2] (gbl_channel_prefix_matrix): shape=[num_ranks, num_channels]: TODO: what's this ?
-                    # handle[3] (recv_rdma_channel_prefix_matrix): shape=[num_rdma_ranks, num_channels]: TODO: what's this ?
-                    # handle[4] (recv_rdma_rank_prefix_sum): shape=[num_rdma_ranks,]: TODO: what's this ?
-                    # handle[5] (recv_gbl_channel_prefix_matrix): shape=[num_ranks, num_channels]: TODO: what's this ?
-                    # handle[6] (recv_gbl_rank_prefix_sum): shape=[num_ranks,]: TODO: what's this ?
-                    # handle[7] (recv_src_meta): shape=[num_recv_tokens, sizeof(internode::SourceMeta)=8]: TODO: what's this ?
-                    # handle[8] (send_rdma_head): shape=[num_tokens, num_rdma_ranks]: TODO: what's this ?
-                    # handle[9] (send_nvl_head): shape=[num_rdma_recv_tokens, num_local_ranks]: TODO: what's this ?
+                    # handle[0] (is_token_in_rank): shape=[num_tokens, num_ranks]
+                    # handle[1] (rdma_channel_prefix_matrix): shape=[num_rdma_ranks, num_channels]: rdma_channel_prefix_matrix[r, :]: the prefix sum of send token end idxs sent by each send-channel to rdma rank r
+                    # calculated in notify_dispatch
+                    # handle[2] (gbl_channel_prefix_matrix): shape=[num_ranks, num_channels]: gbl_channel_prefix_matrix[r, :]: the prefix sum of send token end idxs sent by each send-channel to rank r
+                    # calculated in notify_dispatch
+                    # handle[3] (recv_rdma_channel_prefix_matrix): shape=[num_rdma_ranks, num_channels]: recv_rdma_channel_prefix_matrix[r, :]: the prefix sum of recv token end idxs recv by each recv-channel from rdma rank r
+                    # handle[4] (recv_rdma_rank_prefix_sum): shape=[num_rdma_ranks,]: the prefix sum of the number of tokens to recv from each rdma rank
+                    # calculated in notify_dispatch
+                    # handle[5] (recv_gbl_channel_prefix_matrix): shape=[num_ranks, num_channels]: recv_gbl_channel_prefix_matrix[r, :]: the prefix sum of recv token start idxs recv by each recv-channel from global rank r
+                    # NOTE: the start idx is a global idx with rank prefix offsets, i.e. recv_gbl_channel_prefix_matrix[r, 0] does not start from 0 except for r == 0
+                    # handle[6] (recv_gbl_rank_prefix_sum): shape=[num_ranks,]: the prefix sum of the number of tokens to recv from each global rank, thus recv_gbl_rank_prefix_sum[-1] == num_recv_tokens
+                    # calculated in notify_dispatch
+                    # handle[7] (recv_src_meta): shape=[num_recv_tokens, sizeof(internode::SourceMeta)=8]: the source meta for each recv token, 
+                    # where a SourceMeta struct object stores the src_rdma_rank and the is_token_in_nvl_rank_bits map of this recv token
+                    # where the j-bit of is_token_in_nvl_rank_bits indicates whether this recv token needs to be sent to the j-th local rank of this node
+                    # handle[8] (send_rdma_head): shape=[num_tokens, num_rdma_ranks]: send_rdma_head[i, r]: the offset in the corr. channel of send token i if it needs to be sent to rdma rank r
+                    # since the rdma_tail_idx starts at 0 when token_idx == token_start_idx for the corr. channel
+                    # thus the send_rdma_head[:, r] will be several cu_seqlens like: [0, 1, ... channel0_size, 0, 1, ... channel1_size, ...]
+                    # and if all is_token_in_rank[i, r*8:(r+1)*8] == -1, then send_rdma_head[i, r] == -1 as well (and should be ignored in the cu_seqlens above)
+                    # handle[9] (send_nvl_head): shape=[num_rdma_recv_tokens, num_local_ranks]: send_nvl_head[i, r]: the token offset of the ith recv token in the nvl forward "list" for local rank r
+                    # and if this recv token won't be sent to local rank r, then send_nvl_head[i, r] == -1 as well
                     recv_x, recv_topk_idx, recv_topk_weights, recv_num_tokens_per_expert_list, handle, event = buffer.dispatch(**dispatch_args)
                     
                     # wait
@@ -275,7 +286,7 @@ def test_main(args: argparse.Namespace, num_sms: int,
                     recv_x = per_token_cast_back(*recv_x) if isinstance(recv_x, tuple) else recv_x
 
                     # check
-                    recv_gbl_rank_prefix_sum = handle[-4]
+                    assert recv_gbl_rank_prefix_sum[-1].item() == recv_x.size(0), f'{recv_gbl_rank_prefix_sum[-1].item()} != {recv_x.size(0)}'
                     assert gbl_num_tokens_per_rank[rank].item() == recv_x.size(0), f'{gbl_num_tokens_per_rank[rank].item()} != {recv_x.size(0)}'
                     assert gbl_num_tokens_per_expert.view(num_ranks, -1)[rank].tolist() == recv_num_tokens_per_expert_list
                     if current_x is not x_pure_rand:
@@ -441,7 +452,7 @@ def test_loop(args: argparse.Namespace):
         print(
             (
                 f"[config] {num_nvl_bytes=} ({num_nvl_bytes / 1e9:.2f} GB) | {num_rdma_bytes=} ({num_rdma_bytes / 1e9:.2f} GB) | "
-                f"{num_nodes=} | {num_ranks=} | {num_local_ranks=} | {group.size()=} | "
+                f"{num_nodes=} (num_rdma_ranks) | {num_ranks=} | {num_local_ranks=} | {group.size()=} | "
                 f" {num_sms=} | {num_qps_per_rank=} | "
                 f"{num_tokens=} | {hidden=} | {num_topk=} | {num_experts=} | {num_topk_groups=}\n\n\n"
             )

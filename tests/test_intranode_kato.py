@@ -152,7 +152,9 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
                     # recv_num_tokens_per_expert_list: shape=[num_local_experts,]: the number of tokens to recv for each local expert in this rank
                     # handle: the tuple of some meta tensors that will be passed to combine or cached dispatch
                     # handle[0] (rank_prefix_matrix): shape=[num_ranks, num_ranks]: rank_prefix_matrix[:, r]: the prefix sum of number of tokens (i.e. end idxs) sent by each rank to rank r
+                    # calculated in notify_dispatch
                     # handle[1] (channel_prefix_matrix): shape=[num_ranks, num_channels]: channel_prefix_matrix[r, :]: the prefix sum of send token end idxs sent by each send-channel to rank r
+                    # calculated in notify_dispatch
                     # handle[2] (recv_channel_prefix_matrix): shape=[num_ranks, num_channels]: recv_channel_prefix_matrix[r, :]: the prefix sum of recv token start idxs recv by each recv-channel from rank r
                     # handle[3] (recv_src_idx): shape=[num_recv_tokens,]: the original token idx in the sender's buffer of each recv token
                     # so this is used in combine stage to indicate the original token position that each recv token should be reduced to
