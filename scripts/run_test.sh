@@ -9,6 +9,14 @@ mkdir -p $LOG_ROOT
 # export NVSHMEM_DISABLE_P2P=0 # set to 0 to enable NVLink in low-latency mode
 # export NVSHMEM_SYMMETRIC_SIZE=2**30 # default: 1GB
 
+TEST_GROUP_COLLECTIVE=true
+
+
+TEST_SCRIPT_TAG=""
+if [[ $TEST_GROUP_COLLECTIVE == true ]]; then
+    TEST_SCRIPT_TAG="_grpcoll"
+fi
+
 
 # ----- test-intranode ----- #
 
@@ -18,7 +26,7 @@ mkdir -p $LOG_ROOT
 export DEEPEP_TEST_INTRANODE_LOW_LATENCY=0
 
 # python tests/test_intranode.py > ${LOG_ROOT}/test_intranode.log 2>&1
-# python tests/test_intranode_kato.py > ${LOG_ROOT}/test_intranode_kato.log 2>&1; exit 0
+python tests/test_intranode${TEST_SCRIPT_TAG}_kato.py > ${LOG_ROOT}/test_intranode${TEST_SCRIPT_TAG}_kato.log 2>&1; exit 0
 
 # ----- test-low-latency ----- #
 
@@ -26,7 +34,7 @@ export DEEPEP_TEST_INTRANODE_LOW_LATENCY=0
 export DEEPEP_TEST_LOW_LATENCY_ALLOW_NVLINK=1
 
 # python tests/test_low_latency.py > ${LOG_ROOT}/test_low_latency.log 2>&1
-# python tests/test_low_latency_kato.py > ${LOG_ROOT}/test_low_latency_kato.log 2>&1; exit 0
+# python tests/test_low_latency${TEST_SCRIPT_TAG}_kato.py > ${LOG_ROOT}/test_low_latency${TEST_SCRIPT_TAG}_kato.log 2>&1; exit 0
 
 
 # ----- test-internode ----- #
@@ -59,7 +67,7 @@ CMD="torchrun \
 --node_rank=$RANK \
 --master_addr=$MASTER_ADDR \
 --master_port=$MASTER_PORT \
-tests/test_internode_kato.py
+tests/test_internode${TEST_SCRIPT_TAG}_kato.py
 "
 
-$CMD > ${LOG_ROOT}/test_internode_kato_n${RANK}.log 2>&1
+# $CMD > "${LOG_ROOT}/test_internode${TEST_SCRIPT_TAG}_kato_n${RANK}.log" 2>&1
