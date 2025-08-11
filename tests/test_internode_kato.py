@@ -265,8 +265,8 @@ def test_main(args: argparse.Namespace, num_sms: int,
                                 f"{recv_gbl_channel_prefix_matrix.shape=} | {recv_gbl_channel_prefix_matrix=}\n" # handle[5]
                                 f"{recv_gbl_rank_prefix_sum.shape=} | {recv_gbl_rank_prefix_sum=}\n" # handle[6]
                                 f"{recv_src_meta.shape=} | {recv_src_meta=}\n" # handle[7]
-                                f"{send_rdma_head.shape=} | {send_rdma_head=}\n" # handle[8]
-                                f"{send_nvl_head.shape=} | {send_nvl_head=}\n" # handle[9]
+                                f"After dipatch: {send_rdma_head.shape=} | {send_rdma_head=}\n" # handle[8]
+                                f"After dipatch: {send_nvl_head.shape=} | {send_nvl_head=}\n\n" # handle[9]
                             )
                             , flush=True
                         )
@@ -277,7 +277,16 @@ def test_main(args: argparse.Namespace, num_sms: int,
                                 f"{recv_topk_idx=}\n"
                                 f"{recv_topk_weights=}\n"
                                 f"{len(recv_num_tokens_per_expert_list)=} | {recv_num_tokens_per_expert_list=}\n"
-                                
+                                f"{is_token_in_rank_handle.shape=} | {is_token_in_rank_handle=}\n" # handle[0]
+                                f"{rdma_channel_prefix_matrix.shape=} | {rdma_channel_prefix_matrix=}\n" # handle[1]
+                                f"{gbl_channel_prefix_matrix.shape=} | {gbl_channel_prefix_matrix=}\n" # handle[2]
+                                f"{recv_rdma_channel_prefix_matrix.shape=} | {recv_rdma_channel_prefix_matrix=}\n" # handle[3]
+                                f"{recv_rdma_rank_prefix_sum.shape=} | {recv_rdma_rank_prefix_sum=}\n" # handle[4]
+                                f"{recv_gbl_channel_prefix_matrix.shape=} | {recv_gbl_channel_prefix_matrix=}\n" # handle[5]
+                                f"{recv_gbl_rank_prefix_sum.shape=} | {recv_gbl_rank_prefix_sum=}\n" # handle[6]
+                                f"{recv_src_meta.shape=} | {recv_src_meta=}\n" # handle[7]
+                                f"After dipatch: {send_rdma_head.shape=} | {send_rdma_head=}\n" # handle[8]
+                                f"After dipatch: {send_nvl_head.shape=} | {send_nvl_head=}\n\n" # handle[9]
                             )
                             , flush=True
                         )
@@ -333,6 +342,10 @@ def test_main(args: argparse.Namespace, num_sms: int,
                     # NOTE: the combined_x is assumed to be already scaled by topk_weights before combining, thus in kernel we don't have to multiply topk_weights
                     # combined_topk_weights: shape=[num_tokens, topk]: combined_topk_weights[i]: the ith token's sum-reduction weights
                     # NOTE: the topk_weights might not a valid probability distribution, thus here we might need combined_topk_weights to be normalized
+                    # NOTE: the send_rdma_head will be modified in-place in internode::cached_notify for the entries == -1 to the position of next valid token (encoded to -p-1)
+                    # since the combine kernel needs to know the channel position when iterating at this token, even though it is not sent to the target rdma rank
+                    # NOTE: the send_nvl_head will be modified in-place in internode::cached_notify for the entries == -1 to the position of next valid token (encoded to -p-1)
+                    # since the combine kernel needs to know the channel position when iterating at this token, even though it is not sent to the target rdma rank
                     combined_x, combined_topk_weights, event = buffer.combine(**combine_args)
                     
                     # wait
@@ -344,6 +357,8 @@ def test_main(args: argparse.Namespace, num_sms: int,
                             (
                                 f"\n[RANK {rank}]: {combined_x.shape=}\n"
                                 f"{combined_topk_weights.shape=} | {combined_topk_weights=}\n"
+                                f"Before combine: {send_rdma_head.shape=} | {send_rdma_head=}\n\n"
+                                f"Before combine: {send_nvl_head.shape=} | {send_nvl_head=}\n\n"
                             )
                             , flush=True
                         )
@@ -352,6 +367,8 @@ def test_main(args: argparse.Namespace, num_sms: int,
                             (
                                 f"\n[RANK {rank}]: {combined_x.shape=}\n"
                                 f"{combined_topk_weights=}\n"
+                                f"Before combine: {send_rdma_head.shape=} | {send_rdma_head=}\n\n"
+                                f"Before combine: {send_nvl_head.shape=} | {send_nvl_head=}\n\n"
                             )
                             , flush=True
                         )
