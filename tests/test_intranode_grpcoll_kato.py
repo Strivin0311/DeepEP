@@ -82,7 +82,7 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
     # inplace_unique(rank_idx, num_ranks)
     num_input_splits = 10
     input_split_size_list = get_random_split_size_list(num_tokens, num_input_splits)
-    dst_indices_list = get_random_dst_indices_list(num_input_splits, num_ranks)
+    dst_indices_list = get_random_dst_indices_list(num_input_splits, num_ranks, min_num_dst_ranks=1) # HACK: for now, empty dst rank is not supported
     output_split_size_list, src_index_list = get_output_split_size_list_and_src_index_list(input_split_size_list, dst_indices_list, group)
     
     # get ref dispatch output by group-cast

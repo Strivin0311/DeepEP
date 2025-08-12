@@ -16,10 +16,15 @@ def get_random_split_size_list(
 def get_random_dst_indices_list(
     num_splits: int,
     num_ranks: int,
-    allow_empty_dst: bool = False
+    min_num_dst_ranks: int = 0,
+    max_num_dst_ranks: int = None,
 ) -> list[list[int]]:
     dst_indices_list = [[] for _ in range(num_splits)]
-    num_dst_ranks_per_split = torch.randint(0 if allow_empty_dst else 1, num_ranks+1, (num_splits,)).tolist()
+    num_dst_ranks_per_split = torch.randint(
+        min_num_dst_ranks,
+        (num_ranks + 1) if max_num_dst_ranks is None else (max_num_dst_ranks + 1), 
+        (num_splits,)
+    ).tolist()
     
     for dst_indices, num_dst_ranks in zip(dst_indices_list, num_dst_ranks_per_split):
         dst_indices.extend(sorted(random.sample(range(num_ranks), num_dst_ranks)))

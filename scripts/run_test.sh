@@ -26,7 +26,7 @@ fi
 export DEEPEP_TEST_INTRANODE_LOW_LATENCY=0
 
 # python tests/test_intranode.py > ${LOG_ROOT}/test_intranode.log 2>&1
-python tests/test_intranode${TEST_SCRIPT_TAG}_kato.py > ${LOG_ROOT}/test_intranode${TEST_SCRIPT_TAG}_kato.log 2>&1; exit 0
+# python tests/test_intranode${TEST_SCRIPT_TAG}_kato.py > ${LOG_ROOT}/test_intranode${TEST_SCRIPT_TAG}_kato.log 2>&1; exit 0
 
 # ----- test-low-latency ----- #
 
@@ -34,7 +34,7 @@ python tests/test_intranode${TEST_SCRIPT_TAG}_kato.py > ${LOG_ROOT}/test_intrano
 export DEEPEP_TEST_LOW_LATENCY_ALLOW_NVLINK=1
 
 # python tests/test_low_latency.py > ${LOG_ROOT}/test_low_latency.log 2>&1
-# python tests/test_low_latency${TEST_SCRIPT_TAG}_kato.py > ${LOG_ROOT}/test_low_latency${TEST_SCRIPT_TAG}_kato.log 2>&1; exit 0
+python tests/test_low_latency${TEST_SCRIPT_TAG}_kato.py > ${LOG_ROOT}/test_low_latency${TEST_SCRIPT_TAG}_kato.log 2>&1; exit 0
 
 
 # ----- test-internode ----- #

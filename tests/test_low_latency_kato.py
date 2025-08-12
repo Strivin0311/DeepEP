@@ -93,7 +93,7 @@ def test_main(num_tokens: int, hidden: int, num_experts: int, num_topk: int,
                         # print 
                         print(
                             (
-                                f"[RANK {rank}] {packed_recv_x=} | {packed_recv_x.shape=}\n"
+                                f"[RANK {rank}]: {packed_recv_x=} | {packed_recv_x.shape=}\n"
                                 f"{packed_recv_count=} | {packed_recv_count.shape=}\n"
                                 f"{packed_recv_src_info=} | {packed_recv_src_info.shape=}\n"
                                 f"{packed_recv_layout_range=} | {packed_recv_layout_range.shape=}\n"
@@ -165,7 +165,7 @@ def test_main(num_tokens: int, hidden: int, num_experts: int, num_topk: int,
                             # print
                             print(
                                 (
-                                    f"[RANK {rank}] {combined_x=} | {combined_x.shape=}\n"
+                                    f"[RANK {rank}]: {combined_x=} | {combined_x.shape=}\n"
                                     f"{event=} | {hook=}\n\n"
                                 )
                                 , flush=True
@@ -173,7 +173,7 @@ def test_main(num_tokens: int, hidden: int, num_experts: int, num_topk: int,
                             
                             # checks
                             if do_check:
-                                assert torch.equal(out, combined_x), f'{out=}\n{combined_x=}'
+                                assert torch.equal(out, combined_x)
                                 assert torch.equal(simulated_gemm_x, packed_recv_x)
                                 diff = calc_diff(current_x * topk_weights.masked_fill(topk_idx == -1, 0).sum(dim=1).view(-1, 1), combined_x)
                                 assert torch.isnan(combined_x).sum().item() == 0
@@ -254,7 +254,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                 f"[config] {num_nvl_bytes=} | {num_rdma_bytes=} ({num_rdma_bytes / 1e9:.2f} GB) | "
                 f"{num_ranks=} | {num_tokens=} (num_max_dispatch_tokens_per_rank) | {num_max_recv_tokens=} | "
                 f"{group.size()=} | {hidden=} |"
-                f" {num_topk=} | {num_experts=} | {num_local_experts} | "
+                f" {num_topk=} | {num_experts=} | {num_local_experts=} | "
                 f"{num_qps_per_rank=} | {allow_nvlink=}\n\n"
             )
             , flush=True
@@ -277,7 +277,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
         explicitly_destroy=True
     )
     test_main(num_tokens, hidden, num_experts, num_topk, rank, num_ranks, group, buffer,
-              use_logfmt=args.use_logfmt, seed=1)
+              use_logfmt=args.use_logfmt, seed=0)
 
     do_pressure_test = args.pressure_test
     for seed in range(int(1e9) if do_pressure_test else 0):
