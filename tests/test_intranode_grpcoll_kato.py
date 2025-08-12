@@ -1,6 +1,7 @@
 import os
 import argparse
 import time
+import random
 import torch
 import torch.distributed as dist
 
@@ -11,6 +12,9 @@ from utils import init_dist, bench, calc_diff, inplace_unique, per_token_cast_to
 # Test compatibility with low latency functions
 import test_low_latency
 
+from magi_attention.comm.primitive import group_cast_collective, group_reduce_collective
+from grpcoll_utils import get_random_split_size_list, get_random_dst_indices_list, get_output_split_size_list_and_src_index_list, transfer_group_cast_meta_to_dispatch_meta
+
 
 # noinspection PyShadowingNames
 def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks: int, rank: int,
@@ -20,11 +24,28 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
     num_topk, num_experts = args.num_topk, args.num_experts
     num_channels = num_sms // 2 # one channel use two blocks, even-numbered blocks for sending, odd-numbered blocks for receiving
     
+    # Re-Settings for group-collective
+    use_topk = False # NOTE: disable topk to improve bandwidth by saving unused experts
+    num_topk = num_ranks # we can assume num_topk == num_ranks
+    if use_topk:
+        # if using topk, we can assume num_local_experts == num_ranks, 
+        # thus when we only need to send certain token to one rank,
+        # it can be equivalent to send to several "local experts" in that rank
+        num_experts = num_ranks * num_ranks
+    else:
+        # if not, we can further assume num_local_experts == 1
+        # thus sending one token to one rank is equivalent to sending to the only one "local expert" in that rank
+        num_experts = num_ranks
+    
     num_max_nvl_chunked_send_tokens = 8
     nvl_buffer_size = num_max_nvl_chunked_recv_tokens = 256 # nvl_buffer_size, since the buffer is stored at the receiver side
 
     assert num_experts % num_ranks == 0
     num_local_experts = num_experts // num_ranks
+    if use_topk:
+        assert num_local_experts == num_ranks
+    else:
+        assert num_local_experts == 1
     if local_rank == 0:
         print(
             (
@@ -51,30 +72,71 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
     x_e4m3 = per_token_cast_to_fp8(x) if deep_ep.Buffer.is_sm90_compiled() else None
     x_e4m3 = (x_e4m3[0], x_e4m3[1].T.contiguous().T) if x_e4m3 is not None else None
     
-    # Random score
-    scores = torch.randn((num_tokens, num_experts), dtype=torch.float32, device='cuda').abs() + 1
-    topk_idx = torch.topk(scores, num_topk, dim=-1, largest=True, sorted=False)[1]
-    topk_weights = torch.ones((num_tokens, num_topk), dtype=torch.float32, device='cuda') * rank
-    topk_weights_pure_rand = torch.randn((num_tokens, num_topk), dtype=torch.float32, device='cuda')
-    rank_idx = topk_idx // num_local_experts
-    rank_idx.masked_fill_(topk_idx == -1, -1)
-    # this function will apply de-duplicate and sort rank_idx
-    # e.g. if the original rank_idx is: [0, 2, 2, 3, 4, 5, 5, 3]
-    # then the result will be: [5, 4, 3, 2, 0, -1, -1, -1]
-    inplace_unique(rank_idx, num_ranks)
+    # Random score (transfered from group-cast meta args)
+    # scores = torch.randn((num_tokens, num_experts), dtype=torch.float32, device='cuda').abs() + 1
+    # topk_idx = torch.topk(scores, num_topk, dim=-1, largest=True, sorted=False)[1]
+    # topk_weights = torch.ones((num_tokens, num_topk), dtype=torch.float32, device='cuda') * rank
+    # topk_weights_pure_rand = torch.randn((num_tokens, num_topk), dtype=torch.float32, device='cuda')
+    # rank_idx = topk_idx // num_local_experts
+    # rank_idx.masked_fill_(topk_idx == -1, -1)
+    # inplace_unique(rank_idx, num_ranks)
+    num_input_splits = 10
+    input_split_size_list = get_random_split_size_list(num_tokens, num_input_splits)
+    dst_indices_list = get_random_dst_indices_list(num_input_splits, num_ranks)
+    output_split_size_list, src_index_list = get_output_split_size_list_and_src_index_list(input_split_size_list, dst_indices_list, group)
+    
+    # get ref dispatch output by group-cast
+    recv_x_gc = torch.empty((sum(output_split_size_list), *x.shape[1:]), dtype=torch.bfloat16, device='cuda')
+    work_with_pf_gc = group_cast_collective(
+        input=x,
+        output=recv_x_gc,
+        input_split_size_list=input_split_size_list,
+        dst_indices_list=dst_indices_list,
+        output_split_size_list=output_split_size_list,
+        src_index_list=src_index_list,
+        group=group,
+    )
+    recv_x_gc = work_with_pf_gc.wait_post_process(recv_x_gc)
+    print(f"[RANK {rank}]: {recv_x_gc.shape=} | {recv_x_gc=}\n", flush=True)
+    
+    # get ref combine output by group-reduce
+    combined_x_gr = torch.zeros_like(x)
+    work_with_pf_gr = group_reduce_collective(
+        input=recv_x_gc,
+        output=combined_x_gr,
+        input_split_size_list=output_split_size_list,
+        dst_index_list=src_index_list,
+        output_split_size_list=input_split_size_list,
+        src_indices_list=dst_indices_list,
+        group=group,
+    )
+    combined_x_gr = work_with_pf_gr.wait_post_process(combined_x_gr)
+    print(f"[RANK {rank}]: {combined_x_gr.shape=} | {combined_x_gr=}\n", flush=True)
+    
+    # transfer group-cast meta args to dispatch meta args
+    rank_idx, topk_idx, topk_weights = transfer_group_cast_meta_to_dispatch_meta(
+        rank,
+        num_ranks,
+        num_local_experts,
+        input_split_size_list,
+        dst_indices_list,
+        device='cuda',
+        use_topk=use_topk,
+    )
+    if use_topk:
+        topk_weights_pure_rand = torch.randn_like(topk_weights)
+        rank_idx_ref = topk_idx // num_local_experts
+        rank_idx_ref.masked_fill_(topk_idx == -1, -1)
+        inplace_unique(rank_idx_ref, num_ranks)
+        assert torch.equal(rank_idx, rank_idx_ref), (
+            f"[RANK {rank}]: diff for rank_idx and rank_idx_ref\n{rank_idx=}\n"
+            f"{rank_idx_ref=}\n"
+        )
+    else:
+        topk_weights_pure_rand = None
+    print(f"[RANK {rank}]: {input_split_size_list=} | {dst_indices_list=} | {output_split_size_list=} | {src_index_list=} | {sum(output_split_size_list)=}\n", flush=True)
+    print(f"[RANK {rank}]: {topk_idx=} | {topk_weights=}\n", flush=True)
     print(f"[RANK {rank}]: {rank_idx=}\n", flush=True)
-
-    # Expert meta
-    # num_tokens_per_expert[e]: the number of tokens sent to expert e by this rank
-    # gbl_num_tokens_per_expert[e]: the number of tokens sent to expert e by all ranks
-    num_tokens_per_expert = torch.zeros((num_experts, ), dtype=torch.int, device='cuda')
-    for i in range(num_experts):
-        num_tokens_per_expert[i] = (topk_idx == i).sum()
-    gbl_num_tokens_per_expert = num_tokens_per_expert.clone()
-    dist.all_reduce(gbl_num_tokens_per_expert, group=group)
-    if local_rank == 0:
-        print(f"{gbl_num_tokens_per_expert=} | {gbl_num_tokens_per_expert.shape=}\n", flush=True)
-    print(f"[RANK {rank}]: {num_tokens_per_expert=} | {num_tokens_per_expert.shape=}\n", flush=True)
 
     # Rank layout meta
     # num_tokens_per_rank[r]: the number of tokens sent to rank r by this rank
@@ -101,22 +163,43 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
         print(f"{gbl_num_tokens_per_rank=} | {gbl_num_tokens_per_rank.shape=}\n", flush=True)
     print(f"[RANK {rank}]: {num_tokens_per_rank=} | {num_tokens_per_rank.shape=}\n", flush=True)
 
-    # get dispatch layout from buffer
-    ref_num_tokens_per_rank, ref_num_tokens_per_rdma_rank, ref_num_tokens_per_expert, ref_is_token_in_rank, event_overlap = \
-        buffer.get_dispatch_layout(topk_idx, num_experts)
+    # Expert meta
+    # num_tokens_per_expert[e]: the number of tokens sent to expert e by this rank
+    # gbl_num_tokens_per_expert[e]: the number of tokens sent to expert e by all ranks
+    if use_topk:
+        num_tokens_per_expert = torch.zeros((num_experts, ), dtype=torch.int, device='cuda')
+        for i in range(num_experts):
+            num_tokens_per_expert[i] = (topk_idx == i).sum()
+        gbl_num_tokens_per_expert = num_tokens_per_expert.clone()
+        dist.all_reduce(gbl_num_tokens_per_expert, group=group)
+        if local_rank == 0:
+            print(f"{gbl_num_tokens_per_expert=} | {gbl_num_tokens_per_expert.shape=}\n", flush=True)
+        print(f"[RANK {rank}]: {num_tokens_per_expert=} | {num_tokens_per_expert.shape=}\n", flush=True)
 
-    # assert close to layout ref
-    assert torch.allclose(ref_num_tokens_per_rank, num_tokens_per_rank)
-    assert torch.allclose(ref_num_tokens_per_expert, num_tokens_per_expert)
-    assert torch.allclose(ref_is_token_in_rank, is_token_in_rank)
-    
-    # benchmark dispatch layout
-    t = bench(lambda: buffer.get_dispatch_layout(topk_idx, num_experts))[0]
-    if local_rank == 0:
-        print(f'[layout] Kernel performance: {t * 1000:.3f} ms', flush=True)
-        print('', flush=True)
-    group.barrier()
-    time.sleep(1)
+
+        # get dispatch layout from buffer
+        ref_num_tokens_per_rank, ref_num_tokens_per_rdma_rank, ref_num_tokens_per_expert, ref_is_token_in_rank, event_overlap = \
+            buffer.get_dispatch_layout(topk_idx, num_experts)
+
+        # assert close to layout ref
+        assert torch.allclose(ref_num_tokens_per_rank, num_tokens_per_rank)
+        assert torch.allclose(ref_num_tokens_per_expert, num_tokens_per_expert)
+        assert torch.allclose(ref_is_token_in_rank, is_token_in_rank)
+        
+        # benchmark dispatch layout
+        t = bench(lambda: buffer.get_dispatch_layout(topk_idx, num_experts))[0]
+        if local_rank == 0:
+            print(f'[layout] Kernel performance: {t * 1000:.3f} ms', flush=True)
+            print('', flush=True)
+        group.barrier()
+        time.sleep(1)
+    else:
+        num_tokens_per_expert = num_tokens_per_rank
+        gbl_num_tokens_per_expert = num_tokens_per_expert.clone()
+        dist.all_reduce(gbl_num_tokens_per_expert, group=group)
+        if local_rank == 0:
+            print(f"{gbl_num_tokens_per_expert=} | {gbl_num_tokens_per_expert.shape=}\n", flush=True)
+        print(f"[RANK {rank}]: {num_tokens_per_expert=} | {num_tokens_per_expert.shape=}\n", flush=True)
 
     # Test dispatch
     # noinspection PyShadowingNames
@@ -131,7 +214,7 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
     for previous_mode in (True,): # (False, True):
         for async_mode in (True,): # (False, True):
             for current_x in filter(lambda elem: elem is not None, (x,)): # (x_pure_rand, x, x_e4m3)):
-                for with_topk in (True,): # (False, True):
+                for with_topk in (use_topk,): # (False, True):
                     if local_rank == 0:
                         print("\n# ------    Test Intranode Dispatch   ------ #\n", flush=True)
                     
@@ -180,7 +263,7 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
                     if with_topk:
                         print(
                             (
-                                f"\n[RANK {rank}]: {recv_x.shape=}\n"
+                                f"\n[RANK {rank}]: {recv_x.shape=} | {recv_x=}\n"
                                 f"{recv_topk_idx.shape=} | {recv_topk_idx=}\n"
                                 f"{recv_topk_weights.shape=} | {recv_topk_weights=}\n"
                                 f"{len(recv_num_tokens_per_expert_list)=} | {recv_num_tokens_per_expert_list=}\n"
@@ -196,7 +279,7 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
                     else:
                         print(
                             (
-                                f"\n[RANK {rank}]: {recv_x.shape=}\n"
+                                f"\n[RANK {rank}]: {recv_x.shape=} | {recv_x=}\n"
                                 f"{recv_topk_idx=}\n"
                                 f"{recv_topk_weights=}\n"
                                 f"{len(recv_num_tokens_per_expert_list)=} | {recv_num_tokens_per_expert_list=}\n"
@@ -214,6 +297,7 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
                     recv_x = per_token_cast_back(*recv_x) if isinstance(recv_x, tuple) else recv_x
 
                     # check
+                    assert torch.equal(recv_x, recv_x_gc)
                     assert torch.equal(is_token_in_rank_handle, is_token_in_rank)
                     assert torch.equal(channel_prefix_matrix[:, -1], num_tokens_per_rank)
                     assert torch.equal(recv_channel_prefix_matrix[rank, 1:], channel_prefix_matrix[rank, :-1])
@@ -283,11 +367,11 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
                         dispatch_args = {'x': current_x, 'handle': handle, 'config': config, 'async_finish': async_mode}
                         if previous_mode:
                             dispatch_args.update({'previous_event': buffer.capture()})
-                        recv_x, _, _, _, _, event = buffer.dispatch(**dispatch_args)
+                        recv_cache_x, _, _, _, _, event = buffer.dispatch(**dispatch_args)
                         event.current_stream_wait() if async_mode else ()
-                        recv_x = per_token_cast_back(*recv_x) if isinstance(recv_x, tuple) else recv_x
+                        recv_cache_x = per_token_cast_back(*recv_cache_x) if isinstance(recv_cache_x, tuple) else recv_cache_x
                         if current_x is not x_pure_rand:
-                            check_data(recv_x, rank_prefix_matrix)
+                            check_data(recv_cache_x, rank_prefix_matrix)
                     
                     if local_rank == 0:
                         print("\n# ------    Test Intranode Combine   ------ #\n", flush=True)
@@ -316,7 +400,7 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
                     if with_topk:
                         print(
                             (
-                                f"\n[RANK {rank}]: {combined_x.shape=}\n"
+                                f"\n[RANK {rank}]: {combined_x.shape=} | {combined_x=}\n"
                                 f"{combined_topk_weights.shape=} | {combined_topk_weights=}\n"
                                 f"Before combine: {send_head.shape=} | {send_head=}\n\n"
                             )
@@ -325,7 +409,7 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
                     else:
                         print(
                             (
-                                f"\n[RANK {rank}]: {combined_x.shape=}\n"
+                                f"\n[RANK {rank}]: {combined_x.shape=} | {combined_x=}\n"
                                 f"{combined_topk_weights=}\n"
                                 f"Before combine: {send_head.shape=} | {send_head=}\n\n"
                             )
@@ -333,6 +417,7 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
                         )
                     
                     # check
+                    assert torch.equal(combined_x, combined_x_gr)
                     assert torch.equal(send_head[send_head_copy != -1], send_head_copy[send_head_copy != -1]) # cached_notify_combine will modify send_head in-place for any entry == -1
                     check_x = combined_x.float() / is_token_in_rank.sum(dim=1).unsqueeze(1)
                     ref_x = x_pure_rand if current_x is x_pure_rand else x
@@ -459,6 +544,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
         explicitly_destroy=True
     )
     torch.manual_seed(rank)
+    random.seed(rank)
 
     for num_sms in (24,): # range(16, 33, 4): # [16, 20, 24, 28, 32]
         if local_rank == 0:
