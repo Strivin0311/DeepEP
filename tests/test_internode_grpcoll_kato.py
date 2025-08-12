@@ -1,6 +1,7 @@
 import argparse
 import os
 import time
+import random
 from typing import Callable
 
 import torch
@@ -12,6 +13,9 @@ from utils import bench, bench_kineto, calc_diff, create_grouped_scores, inplace
 
 # Test compatibility with low latency functions
 import test_low_latency
+
+from magi_attention.comm.primitive import group_cast_collective, group_reduce_collective
+from grpcoll_utils import get_random_split_size_list, get_random_dst_indices_list, get_output_split_size_list_and_src_index_list, transfer_group_cast_meta_to_dispatch_meta
 
 
 def setup_dist_env(
@@ -48,6 +52,7 @@ def setup_dist_env(
     if base_seed is not None:
         seed = base_seed + seed_bias(rank)
         torch.manual_seed(seed)
+        random.seed(seed)
 
     return (
         num_nodes,
@@ -64,12 +69,18 @@ def setup_dist_env(
 # noinspection PyShadowingNames
 def test_main(args: argparse.Namespace, num_sms: int,
               local_rank: int, num_local_ranks: int, num_ranks: int, num_nodes: int, rank: int,
-              buffer: deep_ep.Buffer, group: dist.ProcessGroup):
+              buffer: deep_ep.Buffer, group: dist.ProcessGroup, use_topk: bool = True):
     # Settings
     num_tokens, hidden = args.num_tokens, args.hidden
     num_topk_groups, num_topk, num_experts = args.num_topk_groups, args.num_topk, args.num_experts
 
     assert num_experts % num_ranks == 0 and num_local_ranks == 8
+    
+    num_local_experts = num_experts // num_ranks
+    if use_topk:
+        assert num_local_experts == num_ranks
+    else:
+        assert num_local_experts == 1
     
     num_max_nvl_chunked_send_tokens = 8
     nvl_buffer_size = num_max_nvl_chunked_recv_tokens = (720 if num_ranks in (144, 160) else 512)
@@ -102,19 +113,77 @@ def test_main(args: argparse.Namespace, num_sms: int,
     x_e4m3 = (x_e4m3[0], x_e4m3[1].T.contiguous().T)
     
     # Random score
-    scores = torch.randn((num_tokens, num_experts), dtype=torch.float32, device='cuda').abs() + 1
-    group_scores = scores.view(num_tokens, num_nodes, -1).amax(dim=-1)
-    group_idx = torch.topk(group_scores, k=num_topk_groups, dim=-1, sorted=False).indices
-    masked_scores = create_grouped_scores(scores, group_idx, num_nodes)
-    assert torch.equal(scores, masked_scores) # since we guarantee num_nodes == num_topk_groups, thus scores == masked_scores
+    # scores = torch.randn((num_tokens, num_experts), dtype=torch.float32, device='cuda').abs() + 1
+    # group_scores = scores.view(num_tokens, num_nodes, -1).amax(dim=-1)
+    # group_idx = torch.topk(group_scores, k=num_topk_groups, dim=-1, sorted=False).indices
+    # masked_scores = create_grouped_scores(scores, group_idx, num_nodes)
+    # assert torch.equal(scores, masked_scores) # since we guarantee num_nodes == num_topk_groups, thus scores == masked_scores
     
-    topk_idx = torch.topk(masked_scores, num_topk, dim=-1, largest=True, sorted=False)[1]
-    topk_weights = torch.ones((num_tokens, num_topk), dtype=torch.float32, device='cuda') * rank
-    topk_weights_pure_rand = torch.randn((num_tokens, num_topk), dtype=torch.float32, device='cuda')
-    rank_idx = topk_idx // (num_experts // num_ranks)
-    rank_idx.masked_fill_(topk_idx == -1, -1)
-    inplace_unique(rank_idx, num_ranks)
-    print(f"[RANK {rank}]: {rank_idx=} | {rank_idx.shape=}\n", flush=True)
+    # topk_idx = torch.topk(masked_scores, num_topk, dim=-1, largest=True, sorted=False)[1]
+    # topk_weights = torch.ones((num_tokens, num_topk), dtype=torch.float32, device='cuda') * rank
+    # topk_weights_pure_rand = torch.randn((num_tokens, num_topk), dtype=torch.float32, device='cuda')
+    # rank_idx = topk_idx // (num_experts // num_ranks)
+    # rank_idx.masked_fill_(topk_idx == -1, -1)
+    # inplace_unique(rank_idx, num_ranks)
+    # print(f"[RANK {rank}]: {rank_idx=} | {rank_idx.shape=}\n", flush=True)
+    
+    num_input_splits = 10
+    input_split_size_list = get_random_split_size_list(num_tokens, num_input_splits)
+    dst_indices_list = get_random_dst_indices_list(num_input_splits, num_ranks, min_num_dst_ranks=1) # HACK: for now, empty dst rank is not supported
+    output_split_size_list, src_index_list = get_output_split_size_list_and_src_index_list(input_split_size_list, dst_indices_list, group)
+    
+    # get ref dispatch output by group-cast
+    recv_x_gc = torch.empty((sum(output_split_size_list), *x.shape[1:]), dtype=torch.bfloat16, device='cuda')
+    work_with_pf_gc = group_cast_collective(
+        input=x,
+        output=recv_x_gc,
+        input_split_size_list=input_split_size_list,
+        dst_indices_list=dst_indices_list,
+        output_split_size_list=output_split_size_list,
+        src_index_list=src_index_list,
+        group=group,
+    )
+    recv_x_gc = work_with_pf_gc.wait_post_process(recv_x_gc)
+    print(f"[RANK {rank}]: {recv_x_gc.shape=} | {recv_x_gc=}\n", flush=True)
+    
+    # get ref combine output by group-reduce
+    combined_x_gr = torch.zeros_like(x)
+    work_with_pf_gr = group_reduce_collective(
+        input=recv_x_gc,
+        output=combined_x_gr,
+        input_split_size_list=output_split_size_list,
+        dst_index_list=src_index_list,
+        output_split_size_list=input_split_size_list,
+        src_indices_list=dst_indices_list,
+        group=group,
+    )
+    combined_x_gr = work_with_pf_gr.wait_post_process(combined_x_gr)
+    print(f"[RANK {rank}]: {combined_x_gr.shape=} | {combined_x_gr=}\n", flush=True)
+    
+    # transfer group-cast meta args to dispatch meta args
+    rank_idx, topk_idx, topk_weights = transfer_group_cast_meta_to_dispatch_meta(
+        rank,
+        num_ranks,
+        num_local_experts,
+        input_split_size_list,
+        dst_indices_list,
+        device="cuda",
+        use_topk=use_topk,
+    )
+    if use_topk:
+        topk_weights_pure_rand = torch.randn_like(topk_weights)
+        rank_idx_ref = topk_idx // num_local_experts
+        rank_idx_ref.masked_fill_(topk_idx == -1, -1)
+        inplace_unique(rank_idx_ref, num_ranks)
+        assert torch.equal(rank_idx, rank_idx_ref), (
+            f"[RANK {rank}]: diff for rank_idx and rank_idx_ref\n{rank_idx=}\n"
+            f"{rank_idx_ref=}\n"
+        )
+    else:
+        topk_weights_pure_rand = None
+    print(f"[RANK {rank}]: {input_split_size_list=} | {dst_indices_list=} | {output_split_size_list=} | {src_index_list=} | {sum(output_split_size_list)=}\n", flush=True)
+    print(f"[RANK {rank}]: {topk_idx=} | {topk_weights=}\n", flush=True)
+    print(f"[RANK {rank}]: {rank_idx=}\n", flush=True)
     
     rdma_rank_idx = rank_idx // num_local_ranks
     rdma_rank_idx.masked_fill_(rank_idx == -1, -1)
@@ -127,16 +196,6 @@ def test_main(args: argparse.Namespace, num_sms: int,
     num_rdma_token_sent = rdma_idx.ne(-1).sum().item()
     assert torch.equal(rdma_idx, rdma_rank_idx)
     print(f"[RANK {rank}]: {rdma_idx=} | {rdma_idx.shape=} | {num_rdma_token_sent=}\n", flush=True)
-
-    # Expert meta
-    num_tokens_per_expert = torch.zeros((num_experts, ), dtype=torch.int, device='cuda')
-    for i in range(num_experts):
-        num_tokens_per_expert[i] = (topk_idx == i).sum()
-    gbl_num_tokens_per_expert = num_tokens_per_expert.clone()
-    dist.all_reduce(gbl_num_tokens_per_expert, group=group)
-    if local_rank == 0:
-        print(f"{gbl_num_tokens_per_expert=} | {gbl_num_tokens_per_expert.shape=}\n", flush=True)
-    print(f"[RANK {rank}]: {num_tokens_per_expert=} | {num_tokens_per_expert.shape=}\n", flush=True)
 
     # Rank layout meta
     num_tokens_per_rank = torch.empty((num_ranks, ), dtype=torch.int, device='cuda')
@@ -159,24 +218,42 @@ def test_main(args: argparse.Namespace, num_sms: int,
         print(f"{gbl_num_tokens_per_rank=} | {gbl_num_tokens_per_rank.shape=}\n", flush=True)
     print(f"[RANK {rank}]: {num_tokens_per_rank=} | {num_tokens_per_rank.shape=}\n", flush=True)
     print(f"[RANK {rank}]: {num_tokens_per_rdma_rank=} | {num_tokens_per_rdma_rank.shape=}\n", flush=True)
-
-    # get dispatch layout from buffer
-    ref_num_tokens_per_rank, ref_num_tokens_per_rdma_rank, ref_num_tokens_per_expert, ref_is_token_in_rank, _ = \
-        buffer.get_dispatch_layout(topk_idx, num_experts)
-        
-    # assert close to layout ref
-    assert torch.allclose(ref_num_tokens_per_rank, num_tokens_per_rank)
-    assert torch.allclose(ref_num_tokens_per_rdma_rank, num_tokens_per_rdma_rank)
-    assert torch.allclose(ref_num_tokens_per_expert, num_tokens_per_expert)
-    assert torch.allclose(ref_is_token_in_rank, is_token_in_rank)
     
-    # benchmark dispatch layout
-    t = bench(lambda: buffer.get_dispatch_layout(topk_idx, num_experts))[0]
-    if local_rank == 0:
-        print(f'[layout] Kernel performance: {t * 1000:.3f} ms', flush=True)
-        print('', flush=True)
-    group.barrier()
-    time.sleep(1)
+    # Expert meta
+    if use_topk:
+        num_tokens_per_expert = torch.zeros((num_experts, ), dtype=torch.int, device='cuda')
+        for i in range(num_experts):
+            num_tokens_per_expert[i] = (topk_idx == i).sum()
+        gbl_num_tokens_per_expert = num_tokens_per_expert.clone()
+        dist.all_reduce(gbl_num_tokens_per_expert, group=group)
+        if local_rank == 0:
+            print(f"{gbl_num_tokens_per_expert=} | {gbl_num_tokens_per_expert.shape=}\n", flush=True)
+        print(f"[RANK {rank}]: {num_tokens_per_expert=} | {num_tokens_per_expert.shape=}\n", flush=True)
+
+        # get dispatch layout from buffer
+        ref_num_tokens_per_rank, ref_num_tokens_per_rdma_rank, ref_num_tokens_per_expert, ref_is_token_in_rank, _ = \
+            buffer.get_dispatch_layout(topk_idx, num_experts)
+            
+        # assert close to layout ref
+        assert torch.allclose(ref_num_tokens_per_rank, num_tokens_per_rank)
+        assert torch.allclose(ref_num_tokens_per_rdma_rank, num_tokens_per_rdma_rank)
+        assert torch.allclose(ref_num_tokens_per_expert, num_tokens_per_expert)
+        assert torch.allclose(ref_is_token_in_rank, is_token_in_rank)
+        
+        # benchmark dispatch layout
+        t = bench(lambda: buffer.get_dispatch_layout(topk_idx, num_experts))[0]
+        if local_rank == 0:
+            print(f'[layout] Kernel performance: {t * 1000:.3f} ms', flush=True)
+            print('', flush=True)
+        group.barrier()
+        time.sleep(1)
+    else:
+        num_tokens_per_expert = num_tokens_per_rank
+        gbl_num_tokens_per_expert = num_tokens_per_expert.clone()
+        dist.all_reduce(gbl_num_tokens_per_expert, group=group)
+        if local_rank == 0:
+            print(f"{gbl_num_tokens_per_expert=} | {gbl_num_tokens_per_expert.shape=}\n", flush=True)
+        print(f"[RANK {rank}]: {num_tokens_per_expert=} | {num_tokens_per_expert.shape=}\n", flush=True)
 
     # Test dispatch
     # noinspection PyShadowingNames
@@ -191,7 +268,7 @@ def test_main(args: argparse.Namespace, num_sms: int,
     for previous_mode in (True,): # (False, True):
         for async_mode in (True,): # (False, True):
             for current_x in (x,): # (x_pure_rand, x, x_e4m3):
-                for with_topk in (True,): # (False, True):
+                for with_topk in (use_topk,): # (False, True):
                     if local_rank == 0:
                         print("\n# ------    Test Internode Dispatch   ------ #\n", flush=True)
                     
@@ -253,7 +330,7 @@ def test_main(args: argparse.Namespace, num_sms: int,
                     if with_topk:
                         print(
                             (
-                                f"\n[RANK {rank}]: {recv_x.shape=}\n"
+                                f"\n[RANK {rank}]: {recv_x.shape=} | {recv_x=}\n"
                                 f"{recv_topk_idx.shape=} | {recv_topk_idx=}\n"
                                 f"{recv_topk_weights.shape=} | {recv_topk_weights=}\n"
                                 f"{len(recv_num_tokens_per_expert_list)=} | {recv_num_tokens_per_expert_list=}\n"
@@ -273,7 +350,7 @@ def test_main(args: argparse.Namespace, num_sms: int,
                     else:
                         print(
                             (
-                                f"\n[RANK {rank}]: {recv_x.shape=}\n"
+                                f"\n[RANK {rank}]: {recv_x.shape=} | {recv_x=}\n"
                                 f"{recv_topk_idx=}\n"
                                 f"{recv_topk_weights=}\n"
                                 f"{len(recv_num_tokens_per_expert_list)=} | {recv_num_tokens_per_expert_list=}\n"
@@ -295,6 +372,7 @@ def test_main(args: argparse.Namespace, num_sms: int,
                     recv_x = per_token_cast_back(*recv_x) if isinstance(recv_x, tuple) else recv_x
 
                     # check
+                    assert torch.equal(recv_x, recv_x_gc)
                     assert recv_gbl_rank_prefix_sum[-1].item() == recv_x.size(0), f'{recv_gbl_rank_prefix_sum[-1].item()} != {recv_x.size(0)}'
                     assert gbl_num_tokens_per_rank[rank].item() == recv_x.size(0), f'{gbl_num_tokens_per_rank[rank].item()} != {recv_x.size(0)}'
                     assert gbl_num_tokens_per_expert.view(num_ranks, -1)[rank].tolist() == recv_num_tokens_per_expert_list
@@ -319,19 +397,19 @@ def test_main(args: argparse.Namespace, num_sms: int,
                         dispatch_args = {'x': current_x, 'handle': handle, 'config': config, 'async_finish': async_mode}
                         if previous_mode:
                             dispatch_args.update({'previous_event': buffer.capture()})
-                        recv_x, _, _, _, _, event = buffer.dispatch(**dispatch_args)
+                        recv_cached_x, _, _, _, _, event = buffer.dispatch(**dispatch_args)
                         event.current_stream_wait() if async_mode else ()
-                        recv_x = per_token_cast_back(*recv_x) if isinstance(recv_x, tuple) else recv_x
+                        recv_cached_x = per_token_cast_back(*recv_cached_x) if isinstance(recv_cached_x, tuple) else recv_cached_x
                         if current_x is not x_pure_rand:
-                            check_data(recv_x, recv_gbl_rank_prefix_sum)
+                            check_data(recv_cached_x, recv_gbl_rank_prefix_sum)
 
                     if local_rank == 0:
                         print("\n# ------    Test Internode Combine   ------ #\n", flush=True)
 
                     # prepare combine args
-                    bias_0 = torch.ones((num_tokens, hidden), dtype=torch.bfloat16, device='cuda')
-                    bias_1 = torch.randn((num_tokens, hidden), dtype=torch.bfloat16, device='cuda')
-                    combine_args = {'x': recv_x, 'bias': (bias_0, bias_1), 'handle': handle, 'config': config, 'async_finish': async_mode}
+                    # bias_0 = torch.ones((num_tokens, hidden), dtype=torch.bfloat16, device='cuda')
+                    # bias_1 = torch.randn((num_tokens, hidden), dtype=torch.bfloat16, device='cuda')
+                    combine_args = {'x': recv_x, 'bias': None, 'handle': handle, 'config': config, 'async_finish': async_mode}
                     if with_topk:
                         combine_args.update({'topk_weights': recv_topk_weights})
                     if previous_mode:
@@ -355,7 +433,7 @@ def test_main(args: argparse.Namespace, num_sms: int,
                     if with_topk:
                         print(
                             (
-                                f"\n[RANK {rank}]: {combined_x.shape=}\n"
+                                f"\n[RANK {rank}]: {combined_x.shape=} | {combined_x=}\n"
                                 f"{combined_topk_weights.shape=} | {combined_topk_weights=}\n"
                                 f"Before combine: {send_rdma_head.shape=} | {send_rdma_head=}\n\n"
                                 f"Before combine: {send_nvl_head.shape=} | {send_nvl_head=}\n\n"
@@ -365,7 +443,7 @@ def test_main(args: argparse.Namespace, num_sms: int,
                     else:
                         print(
                             (
-                                f"\n[RANK {rank}]: {combined_x.shape=}\n"
+                                f"\n[RANK {rank}]: {combined_x.shape=} | {combined_x=}\n"
                                 f"{combined_topk_weights=}\n"
                                 f"Before combine: {send_rdma_head.shape=} | {send_rdma_head=}\n\n"
                                 f"Before combine: {send_nvl_head.shape=} | {send_nvl_head=}\n\n"
@@ -374,7 +452,9 @@ def test_main(args: argparse.Namespace, num_sms: int,
                         )
                     
                     # check
-                    check_x = (combined_x.float() - bias_0.float() - bias_1.float()) / is_token_in_rank.sum(dim=1).unsqueeze(1)
+                    assert torch.equal(combined_x, combined_x_gr)
+                    # check_x = (combined_x.float() - bias_0.float() - bias_1.float()) / is_token_in_rank.sum(dim=1).unsqueeze(1)
+                    check_x = (combined_x.float()) / is_token_in_rank.sum(dim=1).unsqueeze(1)
                     ref_x = x_pure_rand if current_x is x_pure_rand else x
                     assert calc_diff(check_x, ref_x) < 5e-6
                     if with_topk:
@@ -453,7 +533,7 @@ def test_loop(args: argparse.Namespace):
     num_topk, num_experts = args.num_topk, args.num_experts
     
     # init dist
-    num_nodes, num_local_ranks, num_ranks, rank, local_rank, group, device, seed = setup_dist_env(seed_bias=lambda rank: rank)
+    num_nodes, num_local_ranks, num_ranks, rank, local_rank, group, device, seed = setup_dist_env(base_seed=0, seed_bias=lambda rank: rank)
     
     if args.test_ll_compatibility:
         ll_num_tokens, ll_hidden, ll_num_experts, ll_num_topk = 16, 5120, 256, 9
@@ -464,6 +544,13 @@ def test_loop(args: argparse.Namespace):
     
     num_nvl_bytes = int(2e9)
     num_rdma_bytes = int(1e9)
+    
+    # reset for group-collective
+    use_topk = False # NOTE: disable topk to improve bandwidth by saving unused experts
+    num_topk = num_ranks
+    num_experts = num_ranks * num_ranks if use_topk else num_ranks
+    args.num_topk = num_topk
+    args.num_experts = num_experts
     
     if local_rank == 0:
         print(
@@ -488,7 +575,7 @@ def test_loop(args: argparse.Namespace):
     torch.manual_seed(rank)
 
     for i in (num_sms, ):
-        test_main(args, i, local_rank, num_local_ranks, num_ranks, num_nodes, rank, buffer, group)
+        test_main(args, i, local_rank, num_local_ranks, num_ranks, num_nodes, rank, buffer, group, use_topk=use_topk)
         if local_rank == 0:
             print('', flush=True)
 

@@ -253,7 +253,7 @@ def test_main(args: argparse.Namespace, num_sms: int,
                     if with_topk:
                         print(
                             (
-                                f"\n[RANK {rank}]: {recv_x.shape=}\n"
+                                f"\n[RANK {rank}]: {recv_x.shape=} | {recv_x=}\n"
                                 f"{recv_topk_idx.shape=} | {recv_topk_idx=}\n"
                                 f"{recv_topk_weights.shape=} | {recv_topk_weights=}\n"
                                 f"{len(recv_num_tokens_per_expert_list)=} | {recv_num_tokens_per_expert_list=}\n"
@@ -273,7 +273,7 @@ def test_main(args: argparse.Namespace, num_sms: int,
                     else:
                         print(
                             (
-                                f"\n[RANK {rank}]: {recv_x.shape=}\n"
+                                f"\n[RANK {rank}]: {recv_x.shape=} | {recv_x=}\n"
                                 f"{recv_topk_idx=}\n"
                                 f"{recv_topk_weights=}\n"
                                 f"{len(recv_num_tokens_per_expert_list)=} | {recv_num_tokens_per_expert_list=}\n"
@@ -355,7 +355,7 @@ def test_main(args: argparse.Namespace, num_sms: int,
                     if with_topk:
                         print(
                             (
-                                f"\n[RANK {rank}]: {combined_x.shape=}\n"
+                                f"\n[RANK {rank}]: {combined_x.shape=} | {combined_x=}\n\n"
                                 f"{combined_topk_weights.shape=} | {combined_topk_weights=}\n"
                                 f"Before combine: {send_rdma_head.shape=} | {send_rdma_head=}\n\n"
                                 f"Before combine: {send_nvl_head.shape=} | {send_nvl_head=}\n\n"
@@ -365,7 +365,7 @@ def test_main(args: argparse.Namespace, num_sms: int,
                     else:
                         print(
                             (
-                                f"\n[RANK {rank}]: {combined_x.shape=}\n"
+                                f"\n[RANK {rank}]: {combined_x.shape=} | {combined_x=}\n"
                                 f"{combined_topk_weights=}\n"
                                 f"Before combine: {send_rdma_head.shape=} | {send_rdma_head=}\n\n"
                                 f"Before combine: {send_nvl_head.shape=} | {send_nvl_head=}\n\n"

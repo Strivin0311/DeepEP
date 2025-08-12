@@ -76,6 +76,7 @@ def transfer_group_cast_meta_to_dispatch_meta(
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     num_tokens = sum(input_split_size_list)
     num_splits = len(input_split_size_list)
+    input_split_size_list_tensor = torch.tensor(input_split_size_list, dtype=dtype, device=device)
     
     if use_topk:
         assert num_local_experts == num_ranks
@@ -94,7 +95,7 @@ def transfer_group_cast_meta_to_dispatch_meta(
                 end = start + num
                 topk_idxs[split_idx][start:end] = dst_rank * num_ranks + torch.arange(num, dtype=dtype)
                 start = end
-        topk_idxs = topk_idxs.to(device).repeat_interleave(torch.tensor(input_split_size_list), dim=0, output_size=num_tokens) # shape=(num_tokens, num_ranks)
+        topk_idxs = topk_idxs.to(device).repeat_interleave(input_split_size_list_tensor, dim=0, output_size=num_tokens) # shape=(num_tokens, num_ranks)
     else:
         assert num_local_experts == 1
         topk_idxs, topk_weights = None, None
@@ -104,6 +105,6 @@ def transfer_group_cast_meta_to_dispatch_meta(
         num_dst_ranks = len(dst_indices_list[split_idx])
         assert num_dst_ranks > 0, "For now, we only support non-empty dst_indices_list"
         rank_idx[split_idx, :num_dst_ranks] = torch.tensor(sorted(dst_indices_list[split_idx], reverse=True))
-    rank_idx = rank_idx.to(device).repeat_interleave(torch.tensor(input_split_size_list), dim=0, output_size=num_tokens) # shape=(num_tokens, num_ranks)
+    rank_idx = rank_idx.to(device).repeat_interleave(input_split_size_list_tensor, dim=0, output_size=num_tokens) # shape=(num_tokens, num_ranks)
 
     return rank_idx, topk_idxs, topk_weights
