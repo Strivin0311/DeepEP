@@ -189,14 +189,6 @@ def test_main(args: argparse.Namespace, num_sms: int,
     rdma_rank_idx.masked_fill_(rank_idx == -1, -1)
     inplace_unique(rdma_rank_idx, num_nodes)
 
-    # RDMA dispatch counts
-    rdma_idx = topk_idx // (num_experts // num_nodes)
-    rdma_idx.masked_fill_(topk_idx == -1, -1)
-    inplace_unique(rdma_idx, num_nodes)
-    num_rdma_token_sent = rdma_idx.ne(-1).sum().item()
-    assert torch.equal(rdma_idx, rdma_rank_idx)
-    print(f"[RANK {rank}]: {rdma_idx=} | {rdma_idx.shape=} | {num_rdma_token_sent=}\n", flush=True)
-
     # Rank layout meta
     num_tokens_per_rank = torch.empty((num_ranks, ), dtype=torch.int, device='cuda')
     num_tokens_per_rdma_rank = torch.empty((num_nodes, ), dtype=torch.int, device='cuda')
@@ -254,6 +246,19 @@ def test_main(args: argparse.Namespace, num_sms: int,
         if local_rank == 0:
             print(f"{gbl_num_tokens_per_expert=} | {gbl_num_tokens_per_expert.shape=}\n", flush=True)
         print(f"[RANK {rank}]: {num_tokens_per_expert=} | {num_tokens_per_expert.shape=}\n", flush=True)
+
+     # RDMA dispatch counts
+    if use_topk:
+        rdma_idx = topk_idx // (num_experts // num_nodes)
+        rdma_idx.masked_fill_(topk_idx == -1, -1)
+        inplace_unique(rdma_idx, num_nodes)
+        num_rdma_token_sent = rdma_idx.ne(-1).sum().item()
+        assert torch.equal(rdma_idx, rdma_rank_idx)
+        assert torch.equal(num_rdma_token_sent, num_tokens_per_rdma_rank.sum().item())
+        print(f"[RANK {rank}]: {rdma_idx=} | {rdma_idx.shape=} | {num_rdma_token_sent=}\n", flush=True)
+    else:
+        rdma_idx = None
+        num_rdma_token_sent = num_tokens_per_rdma_rank.sum().item()
 
     # Test dispatch
     # noinspection PyShadowingNames
