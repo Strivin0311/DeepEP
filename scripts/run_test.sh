@@ -25,16 +25,26 @@ fi
 #   assert calc_diff(recv_x[:, -1], recv_src_info.view(-1)) < 0.007
 export DEEPEP_TEST_INTRANODE_LOW_LATENCY=0
 
-# python tests/test_intranode.py > ${LOG_ROOT}/test_intranode.log 2>&1
-# python tests/test_intranode${TEST_SCRIPT_TAG}_kato.py > ${LOG_ROOT}/test_intranode${TEST_SCRIPT_TAG}_kato.log 2>&1; exit 0
+# LOG_PATH=${LOG_ROOT}/test_intranode.log
+# echo "Logging to ${LOG_PATH} ..."
+# python tests/test_intranode.py > ${LOG_PATH} 2>&1
+
+# LOG_PATH=${LOG_ROOT}/test_intranode${TEST_SCRIPT_TAG}_kato.log
+# echo "Logging to ${LOG_PATH} ..."
+# python tests/test_intranode${TEST_SCRIPT_TAG}_kato.py > ${LOG_PATH} 2>&1; exit 0
 
 # ----- test-low-latency ----- #
 
 # self-added env variable to control allow-nvlink mode for test_low_latency.py
 export DEEPEP_TEST_LOW_LATENCY_ALLOW_NVLINK=1
 
-# python tests/test_low_latency.py > ${LOG_ROOT}/test_low_latency.log 2>&1
-# python tests/test_low_latency${TEST_SCRIPT_TAG}_kato.py > ${LOG_ROOT}/test_low_latency${TEST_SCRIPT_TAG}_kato.log 2>&1; exit 0
+# LOG_PATH=${LOG_ROOT}/test_low_latency.log
+# echo "Logging to ${LOG_PATH} ..."
+# python tests/test_low_latency.py > ${LOG_PATH} 2>&1
+
+# LOG_PATH=${LOG_ROOT}/test_low_latency${TEST_SCRIPT_TAG}_kato.log
+# echo "Logging to ${LOG_PATH} ..."
+# python tests/test_low_latency${TEST_SCRIPT_TAG}_kato.py > ${LOG_PATH} 2>&1; exit 0
 
 
 # ----- test-internode ----- #
@@ -59,7 +69,9 @@ export RANK=$1
 # self-added env variable to control low-latency mode for test_internode.py
 export DEEPEP_TEST_INTERNODE_LL_COMPATIBILITY=0
 
-# python tests/test_internode.py > ${LOG_ROOT}/test_internode.log 2>&1
+# LOG_PATH=${LOG_ROOT}/test_internode.log
+# echo "Logging to ${LOG_PATH} ..."
+# python tests/test_internode.py > ${LOG_PATH} 2>&1
 
 CMD="torchrun \
 --nproc_per_node=$NPROC_PER_NODE \
@@ -70,4 +82,6 @@ CMD="torchrun \
 tests/test_internode${TEST_SCRIPT_TAG}_kato.py
 "
 
-$CMD > "${LOG_ROOT}/test_internode${TEST_SCRIPT_TAG}_kato_n${RANK}.log" 2>&1
+LOG_PATH=${LOG_ROOT}/test_internode${TEST_SCRIPT_TAG}_kato_n${RANK}.log
+echo "Logging to ${LOG_PATH} ..."
+$CMD > ${LOG_PATH} 2>&1
