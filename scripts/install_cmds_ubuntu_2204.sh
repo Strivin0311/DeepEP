@@ -2,6 +2,11 @@
 
 # NOTE: if using ngc-pytorch container, deepep now should be installed at version >= 25.03
 
+CUDA_VERSION=12.4
+UBUNTU_VERSION=22_04
+GDRCOPY_VERSION=2.4.4
+NVSHMEM_WRAPPER_DIR="/opt/nvshmem"
+
 ## Step0: Prerequisites
 
 ### eanble nvidia_peermem on the host
@@ -118,7 +123,9 @@ sudo reboot
 
 
 # after reboot, check if the changes are applied
-# you should see `options nvidia NVreg_EnableStreamMemOPs=1 NVreg_RegistryDwords="PeerMappingOverride=1;"` in the output
+# you should see something like 
+# `options nvidia NVreg_EnableStreamMemOPs=1 NVreg_RegistryDwords="PeerMappingOverride=1;"` 
+# in the output
 sudo modprobe -c | grep NVreg
 
 
