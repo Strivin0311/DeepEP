@@ -5,6 +5,7 @@
 CUDA_VERSION=12.8
 UBUNTU_VERSION=24_04
 GDRCOPY_VERSION=2.5.1
+NVSHMEM_VERSION=3.4.5
 NVSHMEM_WRAPPER_DIR="/opt/nvshmem"
 
 ## Step0: Prerequisites
@@ -44,7 +45,8 @@ sudo make prefix=/opt/gdrcopy install
 
 pushd packages
 
-sudo apt update && sudo apt install build-essential devscripts debhelper fakeroot pkg-config dkms
+sudo apt update
+sudo apt install build-essential devscripts debhelper fakeroot pkg-config dkms
 
 CUDA=/usr/local/cuda ./build-deb-packages.sh
 
@@ -67,10 +69,14 @@ lsmod | grep gdrdrv # should show gdrdrv module loaded, like: `gdrdrv 28672 0`
 
 ### Container environment notes
 
-sudo apt update && sudo apt install build-essential devscripts debhelper fakeroot pkg-config dkms
+sudo apt update
+sudo apt install build-essential devscripts debhelper fakeroot pkg-config dkms
 
 # you might need to reinstall debs in /path/to/gdrcopy-2.5.1/packages on the container
 # NOTE: the installation process might seems to be unsuccessful, but it is actually fine
+# but it will affect apt-update, so we it's necessary, run:
+# sudo dpkg --remove --force-remove-reinstreq gdrdrv-dkms gdrcopy
+# to uninstall gdrcopy
 
 cd /path/to/gdrcopy-2.5.1/packages
 
@@ -142,6 +148,7 @@ wget https://developer.download.nvidia.com/compute/nvshmem/3.4.5/local_installer
 
 sudo dpkg -i nvshmem-local-repo-ubuntu2404-3.4.5_3.4.5-1_amd64.deb
 
+# NOTE: the secret number * will be popped up in the stdout when the cmd above is successfully executed
 sudo cp /var/nvshmem-local-repo-ubuntu2404-3.4.5/nvshmem-*-keyring.gpg /usr/share/keyrings/
 
 sudo apt-get update
@@ -151,6 +158,7 @@ sudo apt-get -y install nvshmem-cuda-12
 # Verify whether nvshmem is installed
 dpkg -l | grep nvshmem
 find /usr/include -name "nvshmem.h" # for include/
+find /usr/include -name "nvshmemx.h" # for include/
 find /usr/lib/x86_64-linux-gnu -name "libnvshmem_host.so*" # for lib/
 find /usr/lib/x86_64-linux-gnu -name "libnvshmem_device.a*" # for lib/
 dpkg -L libnvshmem3-dev-cuda-12 | grep bin # for bin/
@@ -191,11 +199,21 @@ nvshmem-info -a
 nvshmrun -h
 
 
+# If this doesn't work (e.g. encountering the unexpected low bandwidth like this issue: https://github.com/deepseek-ai/DeepEP/issues/336) 
+# please fall back to the original install script for ubuntu22.04 after:
+# dpkg -l | grep nvshmem
+# apt purge nvshmem-cuda-12 libnvshmem3-cuda-12 libnvshmem3-dev-cuda-12 libnvshmem3-static-cuda-12
+# dpkg --purge --force-remove-reinstreq nvshmem-local-repo-ubuntu2404-3.4.5
+# rm -rf /opt/nvshmem
+# though the authors've said it should work in this issue: https://github.com/deepseek-ai/DeepEP/issues/337
+
+
 ## Step5: install DeepEP
 
 # NOTE: due to some sm_80-related error, in setup.py, we should explicitly add `gencode` for sm90 only to nvcc flags:
 # nvcc_flags = ['-O3', '-Xcompiler', '-O3', '-rdc=true', '--ptxas-options=--register-usage-level=10',
 #                   '-gencode', 'arch=compute_90,code=sm_90']  # Explicitly specify sm_90
 
+pip uninstall -y deep_ep
 pip install -e . -v --no-build-isolation --config-settings editable_mode=strict > logs/install.log 2>&1
 
