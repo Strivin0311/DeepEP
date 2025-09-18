@@ -66,6 +66,8 @@ lsmod | grep gdrdrv # should show gdrdrv module loaded, like: `gdrdrv 123456  0`
 
 ### Container environment notes
 
+export NVIDIA_SRC_DIR="/usr/src/nvidia-570.148.08/nvidia" # replace with your nvidia driver version
+
 sudo apt update
 sudo apt install build-essential devscripts debhelper fakeroot pkg-config dkms
 
@@ -83,31 +85,31 @@ sudo dpkg -i gdrdrv-dkms_2.4.4_amd64.Ubuntu22_04.deb \
 
 gdrcopy_copybw  # should show bandwidth test results as belows:
 
-# GPU id:0; name: Tesla V100-SXM2-32GB; Bus id: 0000:06:00
-# GPU id:1; name: Tesla V100-SXM2-32GB; Bus id: 0000:07:00
-# GPU id:2; name: Tesla V100-SXM2-32GB; Bus id: 0000:0a:00
-# GPU id:3; name: Tesla V100-SXM2-32GB; Bus id: 0000:0b:00
-# GPU id:4; name: Tesla V100-SXM2-32GB; Bus id: 0000:85:00
-# GPU id:5; name: Tesla V100-SXM2-32GB; Bus id: 0000:86:00
-# GPU id:6; name: Tesla V100-SXM2-32GB; Bus id: 0000:89:00
-# GPU id:7; name: Tesla V100-SXM2-32GB; Bus id: 0000:8a:00
+# GPU id:0; name: NVIDIA H100 80GB HBM3; Bus id: 0000:0f:00
+# GPU id:1; name: NVIDIA H100 80GB HBM3; Bus id: 0000:10:00
+# GPU id:2; name: NVIDIA H100 80GB HBM3; Bus id: 0000:41:00
+# GPU id:3; name: NVIDIA H100 80GB HBM3; Bus id: 0000:44:00
+# GPU id:4; name: NVIDIA H100 80GB HBM3; Bus id: 0000:a0:00
+# GPU id:5; name: NVIDIA H100 80GB HBM3; Bus id: 0000:a1:00
+# GPU id:6; name: NVIDIA H100 80GB HBM3; Bus id: 0000:b8:00
+# GPU id:7; name: NVIDIA H100 80GB HBM3; Bus id: 0000:bb:00
 # selecting device 0
 # testing size: 131072
 # rounded size: 131072
 # gpu alloc fn: cuMemAlloc
-# device ptr: 7f1153a00000
-# map_d_ptr: 0x7f1172257000
-# info.va: 7f1153a00000
+# device ptr: 7e51ade00000
+# map_d_ptr: 0x7e53cc118000
+# info.va: 7e51ade00000
 # info.mapped_size: 131072
 # info.page_size: 65536
 # info.mapped: 1
 # info.wc_mapping: 1
 # page offset: 0
-# user-space pointer:0x7f1172257000
+# user-space pointer:0x7e53cc118000
 # writing test, size=131072 offset=0 num_iters=10000
-# write BW: 9638.54MB/s
+# write BW: 17326.2MB/s
 # reading test, size=131072 offset=0 num_iters=100
-# read BW: 530.135MB/s
+# read BW: 665.056MB/s
 # unmapping buffer
 # unpinning buffer
 # closing gdrdrv
