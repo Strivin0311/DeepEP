@@ -12,7 +12,7 @@ from utils import init_dist, bench, calc_diff, inplace_unique, per_token_cast_to
 # Test compatibility with low latency functions
 import test_low_latency
 
-from magi_attention.comm.primitive import group_cast_collective, group_reduce_collective
+from magi_attention.comm.primitive.grpcoll import group_cast_collective, group_reduce_collective
 from grpcoll_utils import get_random_split_size_list, get_random_dst_indices_list, get_output_split_size_list_and_src_index_list, transfer_group_cast_meta_to_dispatch_meta
 
 
