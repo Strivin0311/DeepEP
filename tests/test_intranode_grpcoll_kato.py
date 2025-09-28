@@ -12,7 +12,7 @@ from utils import init_dist, bench, calc_diff, inplace_unique, per_token_cast_to
 # Test compatibility with low latency functions
 import test_low_latency
 
-from magi_attention.comm.primitive.grpcoll import group_cast_collective, group_reduce_collective
+from magi_attention.comm.primitive.grpcoll import group_cast, group_reduce
 from grpcoll_utils import get_random_split_size_list, get_random_dst_indices_list, get_output_split_size_list_and_src_index_list, transfer_group_cast_meta_to_dispatch_meta
 
 
@@ -87,13 +87,13 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
     
     # get ref dispatch output by group-cast
     recv_x_gc = torch.empty((sum(output_split_size_list), *x.shape[1:]), dtype=torch.bfloat16, device='cuda')
-    work_with_pf_gc = group_cast_collective(
+    work_with_pf_gc = group_cast(
         input=x,
         output=recv_x_gc,
-        input_split_size_list=input_split_size_list,
-        dst_indices_list=dst_indices_list,
-        output_split_size_list=output_split_size_list,
-        src_index_list=src_index_list,
+        input_split_sizes=input_split_size_list,
+        output_split_sizes=output_split_size_list,
+        dst_indices=dst_indices_list,
+        src_index=src_index_list,
         group=group,
     )
     recv_x_gc = work_with_pf_gc.wait_post_process(recv_x_gc)
@@ -101,13 +101,13 @@ def test_main(args: argparse.Namespace, num_sms: int, local_rank: int, num_ranks
     
     # get ref combine output by group-reduce
     combined_x_gr = torch.zeros_like(x)
-    work_with_pf_gr = group_reduce_collective(
+    work_with_pf_gr = group_reduce(
         input=recv_x_gc,
         output=combined_x_gr,
-        input_split_size_list=output_split_size_list,
-        dst_index_list=src_index_list,
-        output_split_size_list=input_split_size_list,
-        src_indices_list=dst_indices_list,
+        input_split_sizes=output_split_size_list,
+        output_split_sizes=input_split_size_list,
+        dst_index=src_index_list,
+        src_indices=dst_indices_list,
         group=group,
     )
     combined_x_gr = work_with_pf_gr.wait_post_process(combined_x_gr)

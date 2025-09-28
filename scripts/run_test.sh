@@ -34,9 +34,9 @@ export DEEPEP_TEST_INTRANODE_LOW_LATENCY=0
 # echo "Logging to ${LOG_PATH} ..."
 # python tests/test_intranode.py > ${LOG_PATH} 2>&1
 
-# LOG_PATH=${LOG_ROOT}/test_intranode${TEST_SCRIPT_TAG}_kato.log
-# echo "Logging to ${LOG_PATH} ..."
-# python tests/test_intranode${TEST_SCRIPT_TAG}_kato.py > ${LOG_PATH} 2>&1; exit 0
+LOG_PATH=${LOG_ROOT}/test_intranode${TEST_SCRIPT_TAG}_kato.log
+echo "Logging to ${LOG_PATH} ..."
+python tests/test_intranode${TEST_SCRIPT_TAG}_kato.py > ${LOG_PATH} 2>&1; exit 0
 
 # ----- test-low-latency ----- #
 
